@@ -14,6 +14,16 @@
             <h2>Graphwar Online</h2>
             <p>友達と同じ「合言葉」を入力してください</p>
             <input type="text" id="roomInput" value="ひみつの部屋"><br>
+            
+            <div style="margin: 15px 0; color: #fff; text-align: left; display: inline-block;">
+                <label style="margin-right: 15px;">
+                    <input type="radio" name="unitMode" value="1"> 1体モード
+                </label>
+                <label>
+                    <input type="radio" name="unitMode" value="3" checked> 複数モード (3体)
+                </label>
+            </div><br>
+
             <button id="joinButton">対戦部屋に入る</button>
         </div>
     </div>
@@ -37,7 +47,7 @@
             <div class="bar-row inputs">
                 <div class="input-group formula-group">
                     <label>y =</label>
-                    <input type="text" id="formulaInput" value="6 * sin(x / 5)">
+                    <input type="text" id="formulaInput" value="">
                 </div>
 
                 <div class="input-group angle-group" style="margin-left: 10px;">
@@ -58,19 +68,9 @@
 
         <canvas id="gameCanvas"></canvas>
     </div>
-<!--
-    <div id="debugLog">[Debug Console] 起動しました。testログを待機中...</div>
--->
+
     <script src="game.js"></script>
-<!--
-    <script>
-        window.onerror = function(msg, url, line) {
-            const logEl = document.getElementById('debugLog');
-            if(logEl) logEl.innerHTML += `<br><span style="color:#ff3333;font-weight:bold;">❌エラー: ${msg} (行:${line})</span>`;
-            return false;
-        };
-    </script>
--->
-</body>
+
+    </body>
 </html>
 
