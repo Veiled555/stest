@@ -6,6 +6,11 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
+// ルートアクセス時に生存確認ができるようにする
+app.get('/', (req, res) => {
+    res.send('Server is running perfectly!');
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
@@ -17,33 +22,40 @@ const io = new Server(server, {
 const rooms = {};
 
 io.on('connection', (socket) => {
+    console.log('A user connected:', socket.id);
 
     socket.on('joinRoom', (roomCode) => {
         socket.join(roomCode);
 
         if (!rooms[roomCode]) {
+            // 1人目（ホスト）の入場
             rooms[roomCode] = {
                 hostId: socket.id,
-                players: [socket.id]
+                players: [socket.id],
+                terrain: null,
+                gamePlayersData: null
             };
             socket.emit('roomJoined', { playerId: 1, isHost: true });
         } else {
+            // 2人目（ゲスト）の入場
             const room = rooms[roomCode];
             if (room.players.length < 2) {
                 room.players.push(socket.id);
                 socket.emit('roomJoined', { playerId: 2, isHost: false });
                 
-                io.to(room.hostId).emit('requestTerrainSync');
+                // 2人目が揃ったことを全員に通知（これでホスト側に地形送信を促す）
+                io.to(roomCode).emit('startSyncProcess');
             } else {
                 socket.emit('roomFull');
             }
         }
     });
 
+    // ホストから送られてきた地形データを部屋全員に送る
     socket.on('syncTerrain', (data) => {
         const room = rooms[data.roomCode];
         if (room) {
-            socket.to(data.roomCode).emit('receiveTerrain', {
+            io.to(data.roomCode).emit('receiveTerrain', {
                 terrain: data.terrain,
                 players: data.players
             });
