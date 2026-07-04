@@ -20,6 +20,10 @@ const rooms = {};
 
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
+    // server.js 内の適切な場所（他の socket.on の並び）へ追加してください
+socket.on('syncAngle', (data) => {
+    socket.to(data.roomCode).emit('receiveAngleSync', data);
+});
 
     socket.on('joinRoom', (roomCode, callback) => {
         socket.join(roomCode);
