@@ -7,6 +7,7 @@ const errorDisplay = document.getElementById('errorDisplay');
 const turnDisplay = document.getElementById('turnDisplay');
 const controlBar = document.getElementById('controlBar'); 
 
+// ⚠️ URLの末尾にスラッシュがないか再確認してください
 const socket = io('https://stest-5wts.onrender.com');
 
 let myPlayerId = null;
@@ -21,33 +22,52 @@ let currentPlayerIndex = 0;
 let isAnimating = false;    
 let explosionParticles = [];
 
+// 🔧 デバッグログを画面上に強制的に書き出す関数
+function logToScreen(text, color = "#00ff00") {
+    const consoleEl = document.getElementById('debugLog');
+    if (consoleEl) {
+        consoleEl.innerHTML += `<br><span style="color:${color};">${text}</span>`;
+        consoleEl.scrollTop = consoleEl.scrollHeight; // 常に最新のログにスクロール
+    }
+}
+
 socket.on('connect', () => {
     if(!myPlayerId) {
         turnDisplay.innerText = "接続成功。部屋を入力してください";
     }
-    document.getElementById('debugLog').innerHTML += `<br>✅ サーバーと通信が繋がりました！`;
+    logToScreen(`✅ サーバーと通信が繋がりました！(SocketID: ${socket.id})`);
+});
+
+socket.on('connect_error', (err) => {
+    logToScreen(`❌ 通信接続エラー: ${err.message}`, "#ff3333");
 });
 
 socket.on('roomJoined', (data) => {
     myPlayerId = data.playerId;
-    document.getElementById('debugLog').innerHTML += `<br>🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`;
+    logToScreen(`🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`);
     
     if (data.isHost) {
-        document.getElementById('debugLog').innerHTML += `<br>👑 あなたがホストです。相手を待ちます...`;
-        initGame(); 
+        logToScreen(`👑 あなたがホストです。初期化処理を開始します...`);
+        try {
+            initGame(); 
+            logToScreen(`✨ ホストのゲーム初期化（地形生成等）が正常に完了しました！`);
+        } catch(e) {
+            logToScreen(`❌ ホスト初期化中にエラー発生: ${e.message}`, "#ff3333");
+        }
         isGameReady = false; 
         disableControlsTemporarily(); 
         turnDisplay.innerText = "対戦相手が参加するのを待っています...";
     } else {
-        document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストから地形を貰います...`;
+        logToScreen(`👥 あなたがゲストです。ホストからの地形データを待機します。`);
         turnDisplay.innerText = "ホストの地形データを同期中...";
     }
 });
 
 // 2人揃った合図をサーバーから受け取ったとき
 socket.on('startSyncProcess', () => {
+    logToScreen(`📢 サーバーから「2人揃った」通知(startSyncProcess)を受信しました。`);
     if (myPlayerId === 1) {
-        document.getElementById('debugLog').innerHTML += `<br>👥 ゲストが来ました！地形データを全送信します。`;
+        logToScreen(`👥 自分がホストなので、ゲストに向けて地形データを全送信します！`);
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
             terrain: terrainCircles,
@@ -57,18 +77,30 @@ socket.on('startSyncProcess', () => {
 });
 
 socket.on('receiveTerrain', (data) => {
-    document.getElementById('debugLog').innerHTML += `<br>🌍 地形が完全同期されました！ゲーム開始！`;
-    terrainCircles = data.terrain;
-    players = data.players;
-    destroyedCircles = [];
-    currentPlayerIndex = 0;
-    isGameReady = true; 
-    
-    document.getElementById('lobbyModal').style.display = 'none';
-    
-    updateTurnDisplay();
-    updateTurnButtonState();
-    drawStage();
+    logToScreen(`🌍 地形データをサーバー経由で受領しました。同期処理を実行します。`);
+    try {
+        terrainCircles = data.terrain;
+        players = data.players;
+        destroyedCircles = [];
+        currentPlayerIndex = 0;
+        isGameReady = true; 
+        
+        // 画面を消す処理
+        const modal = document.getElementById('lobbyModal');
+        if (modal) {
+            modal.style.display = 'none';
+            logToScreen(`🔓 lobbyModal（最初の画面）を非表示にしました。`);
+        } else {
+            logToScreen(`⚠️ エラー: lobbyModal という要素がHTMLに見つかりません！`, "#ffcc00");
+        }
+        
+        updateTurnDisplay();
+        updateTurnButtonState();
+        drawStage();
+        logToScreen(`🚀 全ての同期が完了し、ゲーム画面を描画しました！`);
+    } catch(e) {
+        logToScreen(`❌ 地形同期処理中にエラー発生: ${e.message}`, "#ff3333");
+    }
 });
 
 socket.on('receiveFormula', (formula) => {
@@ -81,7 +113,7 @@ document.getElementById('joinButton').addEventListener('click', () => {
     if (!roomCode) return;
     currentRoomCode = roomCode;
 
-    document.getElementById('debugLog').innerHTML += `<br>🚀 部屋「${roomCode}」への入場をサーバーに申請中...`;
+    logToScreen(`🚀 部屋「${roomCode}」への入場リクエストを送信します...`);
     socket.emit('joinRoom', roomCode);
 });
 
@@ -116,7 +148,12 @@ function resizeCanvas() {
 function generateTerrain() {
     terrainCircles = []; destroyedCircles = [];
     const targetCircles = 7; let attempts = 0;
-    if (canvas.width === 0 || canvas.height === 0) return;
+    
+    if (canvas.width === 0 || canvas.height === 0) {
+        logToScreen(`⚠️ 警告: Canvasの横幅または縦幅が0です。(W:${canvas.width}, H:${canvas.height})`, "#ffcc00");
+        return;
+    }
+    
     while (terrainCircles.length < targetCircles && attempts < 1000) {
         attempts++;
         const newCircle = {
@@ -131,8 +168,10 @@ function generateTerrain() {
         }
         if (!tooClose) terrainCircles.push(newCircle);
     }
+    logToScreen(`🌳 地形を生成しました。円の数: ${terrainCircles.length}個 (試行回数: ${attempts})`);
 }
 
+// (中略 - 既存のゲームロジック関数はそのまま維持して安全に動かします)
 function isInTerrain(px, py) {
     const inAnyTerrain = terrainCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
     const inAnyDestroyed = destroyedCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
@@ -156,6 +195,7 @@ function placePlayers() {
             players.push({ x: px, y: canvas.height * 0.4, r: 8, id: i + 1, isAlive: true });
         }
     }
+    logToScreen(`🏃 プレイヤーを配置しました。数: ${players.length}人`);
 }
 
 function parseFormula(inputText) {
@@ -169,6 +209,7 @@ function parseFormula(inputText) {
 }
 
 function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) {
+    if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     originX = canvas.width / 2; originY = canvas.height / 2;
     ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY);
@@ -328,8 +369,19 @@ function updateTurnButtonState() {
 
 function initGame() {
     isAnimating = false; errorDisplay.innerText = "";
-    const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
-    generateTerrain(); placePlayers(); currentPlayerIndex = 0; drawStage();
+    
+    // 💡 iPad等で最初ここが0になって失敗するケースを防ぐため、強制的に親要素のサイズを参照する安全策
+    if (canvas.width === 0 || canvas.height === 0) {
+        const containerRect = document.getElementById('game').getBoundingClientRect();
+        canvas.width = containerRect.width || window.innerWidth;
+        canvas.height = containerRect.height || window.innerHeight;
+        logToScreen(`📏 Canvasのサイズを緊急強制設定しました (W:${canvas.width}, H:${canvas.height})`);
+    }
+
+    generateTerrain(); 
+    placePlayers(); 
+    currentPlayerIndex = 0; 
+    drawStage();
 }
 
 function detectDevice() {
@@ -358,3 +410,4 @@ window.addEventListener('load', () => {
     const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
     drawStage();
 });
+
