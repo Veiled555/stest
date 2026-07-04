@@ -48,5 +48,15 @@
     </div>
 
     <script src="game.js"></script>
+    <div id="debugLog" style="position:fixed; bottom:0; left:0; width:100%; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.8); color:lime; font-size:12px; z-index:99999; pointer-events:none;"></div>
+<script>
+    window.onerror = function(msg, url, line) {
+        document.getElementById('debugLog').innerHTML += `エラー: ${msg} (行:${line})<br>`;
+    };
+    console.log = function(msg) {
+        document.getElementById('debugLog').innerHTML += `ログ: ${msg}<br>`;
+    };
+</script>
+
 </body>
 </html>
