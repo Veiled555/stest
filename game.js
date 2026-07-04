@@ -14,7 +14,6 @@ let myPlayerId = null;
 let currentRoomCode = "";
 let isGameReady = false; 
 
-// 💡 修正：共通のゲーム世界サイズ（1200x700の不変のフィールド）
 const VIRTUAL_WIDTH = 1200;
 const VIRTUAL_HEIGHT = 700;
 let scaleFactor = 1; 
@@ -25,6 +24,8 @@ let players = [];
 let currentPlayerIndex = 0; 
 let isAnimating = false;    
 let explosionParticles = [];
+
+let selectedPlayerIndex = null; 
 
 let disconnectTimer = null;
 const DISCONNECT_TIMEOUT = 60000; 
@@ -41,11 +42,7 @@ socket.on('connect', () => {
     if(!myPlayerId) {
         turnDisplay.innerText = "接続成功。部屋を入力してください";
     }
-    logToScreen(`✅ サーバーと通信が繋がりました！(SocketID: ${socket.id})`);
-});
-
-socket.on('connect_error', (err) => {
-    logToScreen(`❌ 通信接続エラー: ${err.message}`, "#ff3333");
+    logToScreen(`✅ サーバーと通信が繋がりました！`);
 });
 
 socket.on('roomJoined', (data) => {
@@ -65,31 +62,32 @@ socket.on('roomJoined', (data) => {
 });
 
 socket.on('startSyncProcess', () => {
-    if (disconnectTimer) {
-        logToScreen(`✨ 対戦相手が再接続しました。タイマーを解除します。`, "#00ff00");
-        clearTimeout(disconnectTimer);
-        disconnectTimer = null;
-    }
-
     if (myPlayerId === 1) {
-        logToScreen(`👥 相手が揃いました。地形データを送信します。`);
+        logToScreen(`👥 相手が揃いました。ランダム先行・地形データを送信します。`);
+        currentPlayerIndex = Math.random() < 0.5 ? 0 : 1;
+
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
             terrain: terrainCircles,
-            players: players
+            players: players,
+            currentPlayerIndex: currentPlayerIndex 
         });
     }
 });
 
 socket.on('receiveTerrain', (data) => {
-    logToScreen(`🌍 地形が完全同期されました！ゲーム開始！`);
+    logToScreen(`🌍 地形・先行後攻が完全同期されました！ゲーム開始！`);
     terrainCircles = data.terrain;
     players = data.players;
     destroyedCircles = [];
-    currentPlayerIndex = 0;
+    
+    currentPlayerIndex = data.currentPlayerIndex !== undefined ? data.currentPlayerIndex : 0;
+    
     isGameReady = true; 
     isAnimating = false; 
     
+    selectFirstAliveUnit();
+
     document.getElementById('lobbyModal').style.display = 'none';
     document.getElementById('resultModal').style.display = 'none'; 
     
@@ -99,103 +97,140 @@ socket.on('receiveTerrain', (data) => {
     drawStage();
 });
 
-socket.on('receiveFormula', (formula) => {
+socket.on('receiveActiveUnit', (unitIndex) => {
+    const opponentTeam = (myPlayerId === 1) ? 2 : 1;
+    if (players[unitIndex] && players[unitIndex].team === opponentTeam) {
+        logToScreen(`🎯 相手がユニットを変更しました。`);
+        drawStage();
+    }
+});
+
+socket.on('receiveFormula', (data) => {
     logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
-    executeFireShot(formula);
+    executeFireShot(data.formula, data.shooterIndex, data.angle);
 });
 
-socket.on('opponentDisconnected', () => {
-    if (disconnectTimer) return; 
+function selectFirstAliveUnit() {
+    selectedPlayerIndex = null;
+    for (let i = 0; i < players.length; i++) {
+        if (players[i].team === myPlayerId && players[i].isAlive) {
+            selectedPlayerIndex = i;
+            const angleInput = document.getElementById('angleInput');
+            if (angleInput) angleInput.value = players[i].angle || 0;
+            break;
+        }
+    }
+}
 
-    logToScreen(`⚠️ 対戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
-    turnDisplay.innerText = "⚠️ 相手の通信切断：再接続を待機中（60秒）";
-    disableControlsTemporarily();
+canvas.addEventListener('click', (e) => {
+    if (!isGameReady || isAnimating || myPlayerId !== (currentPlayerIndex + 1)) return;
 
-    disconnectTimer = setTimeout(() => {
-        logToScreen(`⏰ 1分が経過しました。ゲームを終了します。`, "#ff3333");
-        showResultMenu("対戦中断", "相手の通信が1分以上途絶えたため、ゲームを終了しました。");
-        isGameReady = false;
-    }, DISCONNECT_TIMEOUT);
-});
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
 
-socket.on('opponentWantsRematch', () => {
-    logToScreen(`🔔 対戦相手が「再戦」を希望しています！`, "#ffdd00");
+    const vCamX = VIRTUAL_WIDTH / 2;
+    const vCamY = VIRTUAL_HEIGHT / 2;
+
+    const mouseVX = (clickX - canvas.width / 2) / scaleFactor + vCamX;
+    const mouseVY = (clickY - canvas.height / 2) / scaleFactor + vCamY;
+
+    for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+        if (p.team === myPlayerId && p.isAlive) {
+            const dist = Math.sqrt((mouseVX - p.x)**2 + (mouseVY - p.y)**2);
+            if (dist < p.r + 25) { 
+                selectedPlayerIndex = i;
+                logToScreen(`🎯 ユニット選択変更: Unit [${i}]`);
+                
+                const angleInput = document.getElementById('angleInput');
+                if (angleInput) angleInput.value = p.angle || 0;
+
+                socket.emit('selectUnit', { roomCode: currentRoomCode, unitIndex: i });
+                
+                drawStage();
+                break;
+            }
+        }
+    }
 });
 
 document.getElementById('joinButton').addEventListener('click', () => {
     const roomCode = document.getElementById('roomInput').value.trim();
     if (!roomCode) return;
     currentRoomCode = roomCode;
-
-    logToScreen(`🚀 部屋「${roomCode}」への入場リクエストを送信します...`);
-    socket.emit('joinRoom', roomCode, (response) => {
-        if (response && response.status === 'ok') {
-            logToScreen(`✅ サーバーが要請を受信しました。`, "#00ff00");
-        }
-    });
+    socket.emit('joinRoom', roomCode, (response) => {});
 });
 
 document.getElementById('rematchButton').addEventListener('click', () => {
-    logToScreen(`🔄 再戦リクエストを送信しました。相手の同意を待ちます...`);
     socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
+    if (myPlayerId === 1) {
+        initGame();
+        currentPlayerIndex = Math.random() < 0.5 ? 0 : 1;
+        socket.emit('syncTerrain', { roomCode: currentRoomCode, terrain: terrainCircles, players: players, currentPlayerIndex: currentPlayerIndex });
+    }
 });
 
-document.getElementById('leaveButton').addEventListener('click', () => {
-    location.reload(); 
-});
+document.getElementById('leaveButton').addEventListener('click', () => { location.reload(); });
 
 function showResultMenu(title, message) {
-    if (disconnectTimer) clearTimeout(disconnectTimer); 
     document.getElementById('resultTitle').innerText = title;
     document.getElementById('resultMessage').innerText = message;
     document.getElementById('resultModal').style.display = 'flex';
 }
 
 function disableControlsTemporarily() {
-    fireBtn.disabled = true;
-    fireBtn.style.opacity = "0.5";
-    fireBtn.style.cursor = "not-allowed";
+    fireBtn.disabled = true; fireBtn.style.opacity = "0.5";
+    document.querySelectorAll('.formula-preset').forEach(btn => { btn.style.opacity = "0.5"; btn.style.cursor = "not-allowed"; });
 }
 
 function fireShot() {
-    if (!isGameReady || isAnimating || disconnectTimer) return;
+    if (!isGameReady || isAnimating || selectedPlayerIndex === null) return;
     if (myPlayerId !== (currentPlayerIndex + 1)) return;
 
     const currentFormula = formulaInput.value;
-    socket.emit('sendFormula', { roomCode: currentRoomCode, formula: currentFormula });
-    executeFireShot(currentFormula);
+    const angleInput = document.getElementById('angleInput');
+    const currentAngle = angleInput ? parseFloat(angleInput.value) || 0 : 0;
+
+    players[selectedPlayerIndex].angle = currentAngle;
+
+    socket.emit('sendFormula', { 
+        roomCode: currentRoomCode, 
+        formula: currentFormula,
+        shooterIndex: selectedPlayerIndex,
+        angle: currentAngle
+    });
+
+    executeFireShot(currentFormula, selectedPlayerIndex, currentAngle);
 }
 
-// 💡 修正：どのような端末（縦長・横長）でも、必ず1200x700が画面にきれいに収まる比率を計算
 function updateScale() {
     if (canvas.width === 0 || canvas.height === 0) return;
-    const scaleX = canvas.width / VIRTUAL_WIDTH;
-    const scaleY = canvas.height / VIRTUAL_HEIGHT;
-    // 小さい方の比率に合わせることで、画面外にはみ出すのを完全に防ぎます
-    scaleFactor = Math.min(scaleX, scaleY);
+    scaleFactor = Math.min(canvas.width / VIRTUAL_WIDTH, canvas.height / VIRTUAL_HEIGHT);
 }
 
-function executeFireShot(targetFormula) {
+function executeFireShot(targetFormula, shooterIndex, shotAngle) {
     errorDisplay.innerText = ""; 
     const formulaString = parseFormula(targetFormula); 
-    const p = players[currentPlayerIndex];
+    const p = players[shooterIndex]; 
     
     let t = 0; 
-    let dir = (currentPlayerIndex === 0) ? 1 : -1;
+    let dir = (p.team === 1) ? 1 : -1; 
     let calculate;
     
     try { 
         calculate = new Function('x', `return ${formulaString};`); 
     } catch(e) { 
         errorDisplay.innerText = `[構文エラー]: ${e.message}`; 
-        isAnimating = false;
-        updateTurnButtonState();
-        return; 
+        isAnimating = false; updateTurnButtonState(); return; 
     }
     
-    // 数式の基準となるグラフの原点（0, 0）は、固定世界の「真ん中」
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
+
+    const rad = (shotAngle * Math.PI) / 180;
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
 
     const startX_Formula = (p.x - vOriginX) / 20; 
     const startY_Formula = (vOriginY - p.y) / 20;
@@ -204,17 +239,9 @@ function executeFireShot(targetFormula) {
     try {
         formulaY_AtPlayer = calculate(startX_Formula);
         if (isNaN(formulaY_AtPlayer) || !isFinite(formulaY_AtPlayer)) { 
-            errorDisplay.innerText = `[計算エラー]: 発射位置での値が不正です。`; 
-            isAnimating = false;
-            updateTurnButtonState();
-            return; 
+            errorDisplay.innerText = `[計算エラー]`; isAnimating = false; updateTurnButtonState(); return; 
         }
-    } catch(e) { 
-        errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
-        isAnimating = false;
-        updateTurnButtonState();
-        return; 
-    }
+    } catch(e) { errorDisplay.innerText = `[実行エラー]`; isAnimating = false; updateTurnButtonState(); return; }
 
     const offsetByFormula = startY_Formula - formulaY_AtPlayer;
     
@@ -223,185 +250,143 @@ function executeFireShot(targetFormula) {
     let shotPath = []; 
 
     function playImpactCinematic(finalX, finalY, onComplete) {
-        let duration = 60; let frame = 0; let currentZoom = 1.0;
-        disableControlsTemporarily();
+        let duration = 50; let frame = 0;
         function zoomAnimation() {
-            frame++; currentZoom = 1.0 - (Math.sin((frame / duration) * (Math.PI / 2)) * 0.48);
-            
-            // 💡 修正：シネマティックカメラもデバイスのスケールをかけた上で中央にカチッと合わせる
+            frame++; let currentZoom = 1.0 - (Math.sin((frame / duration) * (Math.PI / 2)) * 0.4);
             drawStage(finalX, finalY, currentZoom);
-            
-            ctx.save(); 
-            ctx.translate(canvas.width / 2, canvas.height / 2); 
-            ctx.scale(scaleFactor * currentZoom, scaleFactor * currentZoom); 
-            ctx.translate(-finalX, -finalY);
-            
-            ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5 / currentZoom; ctx.beginPath();
-            shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
-            ctx.stroke(); ctx.restore();
-
-            if (frame < duration) { 
-                requestAnimationFrame(zoomAnimation); 
-            } else {
-                setTimeout(() => {
-                    drawStage(); 
-                    onComplete(); 
-                    isAnimating = false; 
-                    updateTurnButtonState();
-                }, 400); 
-            }
+            if (frame < duration) { requestAnimationFrame(zoomAnimation); } 
+            else { setTimeout(() => { drawStage(); onComplete(); isAnimating = false; updateTurnButtonState(); }, 300); }
         }
         zoomAnimation();
     }
 
     function animate() {
-        const currentFormulaX = startX_Formula + (t * dir); 
-        let currentFormulaY;
+        const baseFormulaX = startX_Formula + (t * dir); 
+        let baseFormulaY;
         try { 
-            currentFormulaY = calculate(currentFormulaX) + offsetByFormula; 
-        } catch (e) { 
-            errorDisplay.innerText = `[計算エラー]: ${e.message}`; 
-            isAnimating = false; 
-            updateTurnButtonState();
-            return; 
-        }
+            baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
+        } catch (e) { isAnimating = false; updateTurnButtonState(); return; }
         
-        const canvasX = vOriginX + (currentFormulaX * 20); 
-        const canvasY = vOriginY - (currentFormulaY * 20);
+        const relX = (baseFormulaX - startX_Formula) * 20;
+        const relY = -(baseFormulaY - startY_Formula) * 20; 
         
-        if (isNaN(canvasX) || isNaN(canvasY) || !isFinite(canvasX) || !isFinite(canvasY)) {
-            playImpactCinematic(p.x, p.y, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
-            }); 
-            return;
+        const rotatedRelX = relX * cosA - relY * sinA;
+        const rotatedRelY = relX * sinA + relY * cosA;
+
+        const canvasX = p.x + rotatedRelX;
+        const canvasY = p.y + rotatedRelY;
+        
+        if (isNaN(canvasX) || !isFinite(canvasX)) {
+            playImpactCinematic(p.x, p.y, () => { nextTurn(); }); return;
         }
         
         shotPath.push({ x: canvasX, y: canvasY });
-        if (t === 0) { canvas.dataset.camX = canvasX; canvas.dataset.camY = canvasY; }
-        let currentCamX = parseFloat(canvas.dataset.camX) || vOriginX; 
-        let currentCamY = parseFloat(canvas.dataset.camY) || vOriginY;
-        currentCamX += (canvasX - currentCamX) * 0.15; 
-        currentCamY += (canvasY - currentCamY) * 0.15;
-        canvas.dataset.camX = currentCamX; 
-        canvas.dataset.camY = currentCamY;
-
-        drawStage(currentCamX, currentCamY, 1.0);
+        drawStage(canvasX, canvasY, 1.0);
         
-        ctx.save(); 
-        ctx.translate(canvas.width / 2, canvas.height / 2); 
-        ctx.scale(scaleFactor, scaleFactor); 
-        ctx.translate(-currentCamX, -currentCamY); 
-        
+        ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(scaleFactor, scaleFactor); ctx.translate(-canvasX, -canvasY); 
         ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5; ctx.beginPath();
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-        if (canvasX > VIRTUAL_WIDTH + 200 || canvasX < -200 || canvasY > VIRTUAL_HEIGHT * 2 || canvasY < -VIRTUAL_HEIGHT * 2) {
-            playImpactCinematic(canvasX, canvasY, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
-            }); 
-            return;
+        if (canvasX > VIRTUAL_WIDTH + 300 || canvasX < -300 || canvasY > VIRTUAL_HEIGHT * 2 || canvasY < -VIRTUAL_HEIGHT * 2) {
+            playImpactCinematic(canvasX, canvasY, () => { nextTurn(); }); return;
         }
         
-        const targetPlayerIndex = (currentPlayerIndex + 1) % 2; 
-        const target = players[targetPlayerIndex];
-        
-        if (target.isAlive && Math.sqrt((canvasX - target.x)**2 + (canvasY - target.y)**2) < target.r + 2) {
-            target.isAlive = false; explode(canvasX, canvasY, 20);
-            playImpactCinematic(canvasX, canvasY, () => { 
-                turnDisplay.innerText = `PLAYER ${p.id} WINS!!`; 
-                showResultMenu("GAME OVER", `PLAYER ${p.id} の勝利です！`);
-            }); return;
-        }
-        if (t > 0.8 && Math.sqrt((canvasX - p.x)**2 + (canvasY - p.y)**2) < p.r + 2) {
-            p.isAlive = false; explode(canvasX, canvasY, 20);
-            playImpactCinematic(canvasX, canvasY, () => { 
-                turnDisplay.innerText = `PLAYER ${p.id} SUICIDE!`; 
-                showResultMenu("GAME OVER", `PLAYER ${p.id} が自爆しました。`);
-            }); return;
+        for (let target of players) {
+            if (target.isAlive && Math.sqrt((canvasX - target.x)**2 + (canvasY - target.y)**2) < target.r + 2) {
+                if (t < 0.8 && target === p) continue;
+
+                target.isAlive = false; 
+                explode(canvasX, canvasY, 25);
+                
+                playImpactCinematic(canvasX, canvasY, () => { checkGameEnd(); }); 
+                return;
+            }
         }
         
         if (isInTerrain(canvasX, canvasY)) {
-            explode(canvasX, canvasY, 20);
-            playImpactCinematic(canvasX, canvasY, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
-            }); return;
+            explode(canvasX, canvasY, 25);
+            playImpactCinematic(canvasX, canvasY, () => { nextTurn(); }); return;
         }
         t += 0.15; requestAnimationFrame(animate);
     }
     drawStage(p.x, p.y, 1.0); animate();
 }
 
+// 💡 (このコメントだけ残します。処理上必要な関数のため)
+function nextTurn() {
+    currentPlayerIndex = (currentPlayerIndex + 1) % 2;
+    selectFirstAliveUnit();
+    updateTurnDisplay();
+    updateTurnButtonState();
+    drawStage();
+}
+
+function checkGameEnd() {
+    const team1Alive = players.some(p => p.team === 1 && p.isAlive);
+    const team2Alive = players.some(p => p.team === 2 && p.isAlive);
+
+    if (!team1Alive && !team2Alive) {
+        showResultMenu("GAME OVER", "まさかの引き分け（相打ち）です！");
+        isGameReady = false;
+    } else if (!team2Alive) {
+        showResultMenu("GAME OVER", "PLAYER 1 (チーム青) の勝利です！");
+        isGameReady = false;
+    } else if (!team1Alive) {
+        showResultMenu("GAME OVER", "PLAYER 2 (チーム黄) の勝利です！");
+        isGameReady = false;
+    } else {
+        nextTurn();
+    }
+}
+
 function updateTurnDisplay() {
     if (myPlayerId === null || !isGameReady) return;
-    if (disconnectTimer) return; 
-    let identityText = (myPlayerId === 1) ? "【あなた: PLAYER 1 (左)】" : "【あなた: PLAYER 2 (右)】";
-    if (currentPlayerIndex + 1 === myPlayerId) { turnDisplay.innerText = `${identityText} あなたのターンです！`; } 
+    let identityText = (myPlayerId === 1) ? "【あなた: PLAYER 1 (青チーム)】" : "【あなた: PLAYER 2 (黄チーム)】";
+    if (currentPlayerIndex + 1 === myPlayerId) { turnDisplay.innerText = `${identityText} あなたのターン！操作ユニットをタップできます`; } 
     else { turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; }
 }
 
 function updateTurnButtonState() {
-    if (!isGameReady || disconnectTimer) { disableControlsTemporarily(); return; }
-    if (!isAnimating && players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
+    if (!isGameReady) { disableControlsTemporarily(); return; }
+    if (!isAnimating && myPlayerId === (currentPlayerIndex + 1) && selectedPlayerIndex !== null) {
         fireBtn.disabled = false; fireBtn.style.opacity = "1.0"; fireBtn.style.cursor = "pointer";
+        document.querySelectorAll('.formula-preset').forEach(btn => { btn.style.opacity = "1.0"; btn.style.cursor = "pointer"; });
     } else {
         disableControlsTemporarily();
     }
 }
 
 function initGame() {
-    if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
     isAnimating = false; errorDisplay.innerText = "";
     if (canvas.width === 0 || canvas.height === 0) {
         const containerRect = document.getElementById('game').getBoundingClientRect();
-        canvas.width = containerRect.width || window.innerWidth;
-        canvas.height = containerRect.height || window.innerHeight;
+        canvas.width = containerRect.width; canvas.height = containerRect.height;
     }
     updateScale();
     generateTerrain(); 
     placePlayers(); 
-    currentPlayerIndex = 0; 
     drawStage();
-}
-
-function createExplosionEffects(ex, ey) {
-    for (let i = 0; i < 30; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 2 + Math.random() * 5;
-        explosionParticles.push({
-            x: ex, y: ey,
-            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-            radius: 3 + Math.random() * 4, alpha: 1.0,
-            color: `rgba(255, ${100 + Math.floor(Math.random() * 155)}, 0, `
-        });
-    }
 }
 
 function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width; canvas.height = rect.height;
-    updateScale(); 
-    drawStage();
+    const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
+    updateScale(); drawStage();
 }
 
 function generateTerrain() {
     terrainCircles = []; destroyedCircles = [];
-    const targetCircles = 7; let attempts = 0;
+    const targetCircles = 8; let attempts = 0;
     while (terrainCircles.length < targetCircles && attempts < 1000) {
         attempts++;
         const newCircle = {
-            // 💡 修正：どんな端末でも必ず全体が見えるよう、中央寄りの安全圏（1200x700の内側）に生成
-            x: VIRTUAL_WIDTH * 0.2 + Math.random() * VIRTUAL_WIDTH * 0.6,
+            x: VIRTUAL_WIDTH * 0.18 + Math.random() * VIRTUAL_WIDTH * 0.64,
             y: VIRTUAL_HEIGHT * 0.35 + Math.random() * VIRTUAL_HEIGHT * 0.45, 
-            r: 45 + Math.random() * 60 
+            r: 45 + Math.random() * 65 
         };
         let tooClose = false;
         for (let c of terrainCircles) {
-            const dist = Math.sqrt((newCircle.x - c.x)**2 + (newCircle.y - c.y)**2);
-            if (dist < (newCircle.r + c.r + 40)) { tooClose = true; break; }
+            if (Math.sqrt((newCircle.x - c.x)**2 + (newCircle.y - c.y)**2) < (newCircle.r + c.r + 30)) { tooClose = true; break; }
         }
         if (!tooClose) terrainCircles.push(newCircle);
     }
@@ -415,20 +400,36 @@ function isInTerrain(px, py) {
 
 function placePlayers() {
     players = [];
-    for (let i = 0; i < 2; i++) {
-        let px = (i === 0) ? VIRTUAL_WIDTH * 0.12 : VIRTUAL_WIDTH * 0.88; 
-        let py = VIRTUAL_HEIGHT * 0.1; let isPlaced = false;
+    const UNITS_PER_TEAM = 3;
+
+    for (let k = 0; k < UNITS_PER_TEAM; k++) {
+        let px = VIRTUAL_WIDTH * 0.06 + Math.random() * (VIRTUAL_WIDTH * 0.22);
+        let py = VIRTUAL_HEIGHT * 0.10 + Math.random() * (VIRTUAL_HEIGHT * 0.55);
+        let isPlaced = false;
         while (py < VIRTUAL_HEIGHT - 20) {
             if (isInTerrain(px, py)) {
-                py = py - 40; if (py < 20) py = 30;
-                players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true });
+                py = py - 12;
+                players.push({ x: px, y: py, r: 9, team: 1, isAlive: true, angle: 0 });
                 isPlaced = true; break;
             }
-            py++;
+            py += 2;
         }
-        if (!isPlaced) {
-            players.push({ x: px, y: VIRTUAL_HEIGHT * 0.4, r: 8, id: i + 1, isAlive: true });
+        if (!isPlaced) players.push({ x: px, y: VIRTUAL_HEIGHT * 0.3, r: 9, team: 1, isAlive: true, angle: 0 });
+    }
+
+    for (let k = 0; k < UNITS_PER_TEAM; k++) {
+        let px = VIRTUAL_WIDTH * 0.72 + Math.random() * (VIRTUAL_WIDTH * 0.22);
+        let py = VIRTUAL_HEIGHT * 0.10 + Math.random() * (VIRTUAL_HEIGHT * 0.55);
+        let isPlaced = false;
+        while (py < VIRTUAL_HEIGHT - 20) {
+            if (isInTerrain(px, py)) {
+                py = py - 12;
+                players.push({ x: px, y: py, r: 9, team: 2, isAlive: true, angle: 0 });
+                isPlaced = true; break;
+            }
+            py += 2;
         }
+        if (!isPlaced) players.push({ x: px, y: VIRTUAL_HEIGHT * 0.3, r: 9, team: 2, isAlive: true, angle: 0 });
     }
 }
 
@@ -442,35 +443,16 @@ function parseFormula(inputText) {
     return str;
 }
 
-// 💡 修正：中心のズレを完全解消するための中心固定描画
 function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1) {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    originX = VIRTUAL_WIDTH / 2; 
-    originY = VIRTUAL_HEIGHT / 2;
-
+    originX = VIRTUAL_WIDTH / 2; originY = VIRTUAL_HEIGHT / 2;
     ctx.save(); 
-    // 1. どんな端末であっても、描画の基準点を「画面の完全な中心」に持ってきます
     ctx.translate(canvas.width / 2, canvas.height / 2); 
-    // 2. 算出した全画面フィット倍率（scaleFactor）を適用
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
-    // 3. 固定世界の中心を基準にしてカメラ位置を相殺（これでズレがゼロになります）
     ctx.translate(-camX, -camY);
 
-    // グリッド線
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'; ctx.lineWidth = 1;
-    for (let x = originX; x < VIRTUAL_WIDTH + 2000; x += 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
-    for (let x = originX; x > -2000; x -= 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
-    for (let y = originY; y < 4000; y += 40) { ctx.moveTo(-2000, y); ctx.lineTo(VIRTUAL_WIDTH + 2000, y); }
-    for (let y = originY; y > -2000; y -= 40) { ctx.moveTo(-2000, y); ctx.lineTo(VIRTUAL_WIDTH + 2000, y); }
-    ctx.stroke();
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.beginPath(); ctx.moveTo(-4000, originY); ctx.lineTo(6000, originY); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(originX, -4000); ctx.lineTo(originX, 6000); ctx.stroke();
-
-    // 地形
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
@@ -479,22 +461,26 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     destroyedCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill(); ctx.restore();
 
-    // プレイヤー
-    players.forEach(p => {
+    players.forEach((p, index) => {
         if (p.isAlive) {
-            let finalColor = '#ffffff'; 
-            if (myPlayerId === 1) { finalColor = (p.id === 1) ? '#00ffff' : '#ffffff'; }
-            else if (myPlayerId === 2) { finalColor = (p.id === 2) ? '#ffdd00' : '#ffffff'; }
-            else { finalColor = (p.id === 1) ? '#00ffff' : '#ffdd00'; }
+            ctx.fillStyle = (p.team === 1) ? '#00ffff' : '#ffdd00';
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
 
-            ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-            if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
-                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
+            if (index === selectedPlayerIndex && p.team === (currentPlayerIndex + 1)) {
+                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5; 
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 5, 0, Math.PI * 2); ctx.stroke();
+
+                const rad = ((p.angle || 0) * Math.PI) / 180;
+                const dirX = (p.team === 1) ? 1 : -1;
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'; ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + Math.cos(rad) * 25 * dirX, p.y - Math.sin(rad) * 25);
+                ctx.stroke();
             }
         }
     });
 
-    // エフェクト
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
         if (p.alpha <= 0) { explosionParticles.splice(i, 1); continue; }
@@ -505,14 +491,28 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
 
 function explode(ex, ey, er) {
     destroyedCircles.push({x: ex, y: ey, r: er});
-    createExplosionEffects(ex, ey);
+    for (let i = 0; i < 35; i++) {
+        const angle = Math.random() * Math.PI * 2; const speed = 2 + Math.random() * 5;
+        explosionParticles.push({
+            x: ex, y: ey, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+            radius: 3 + Math.random() * 4, alpha: 1.0, color: `rgba(255, ${120 + Math.floor(Math.random() * 135)}, 0, `
+        });
+    }
 }
 
 function detectDevice() {
     const gameContainer = document.getElementById('game');
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) { gameContainer.classList.add('hud-touch'); } 
-    else { gameContainer.classList.remove('hud-touch'); }
 }
+
+document.body.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'angleInput') {
+        if (selectedPlayerIndex !== null && players[selectedPlayerIndex]) {
+            players[selectedPlayerIndex].angle = parseFloat(e.target.value) || 0;
+            drawStage();
+        }
+    }
+});
 
 document.querySelectorAll('.formula-preset').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -522,17 +522,9 @@ document.querySelectorAll('.formula-preset').forEach(btn => {
 });
 
 fireBtn.addEventListener('click', fireShot);
-formulaInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        fireShot();
-    }
-});
-
 window.addEventListener('resize', resizeCanvas);
 window.addEventListener('load', () => {
     detectDevice();
     const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
-    updateScale();
-    drawStage();
+    updateScale(); drawStage();
 });
