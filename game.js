@@ -14,6 +14,11 @@ let myPlayerId = null;
 let currentRoomCode = "";
 let isGameReady = false; 
 
+// 💡 修正：すべての端末で共通のゲーム世界サイズ（基準値）を定義
+const VIRTUAL_WIDTH = 1200;
+const VIRTUAL_HEIGHT = 700;
+let scaleFactor = 1; // 画面サイズに合わせるための倍率
+
 let originX, originY;
 let terrainCircles = [];    
 let destroyedCircles = [];  
@@ -22,9 +27,8 @@ let currentPlayerIndex = 0;
 let isAnimating = false;    
 let explosionParticles = [];
 
-// 💡 追加：切断検知用タイマーの管理変数
 let disconnectTimer = null;
-const DISCONNECT_TIMEOUT = 60000; // 1分（60秒）
+const DISCONNECT_TIMEOUT = 60000; 
 
 function logToScreen(text, color = "#00ff00") {
     const consoleEl = document.getElementById('debugLog');
@@ -62,7 +66,6 @@ socket.on('roomJoined', (data) => {
 });
 
 socket.on('startSyncProcess', () => {
-    // 💡 相手が（再起動などで）戻ってきた場合はタイマーを解除する
     if (disconnectTimer) {
         logToScreen(`✨ 対戦相手が再接続しました。タイマーを解除します。`, "#00ff00");
         clearTimeout(disconnectTimer);
@@ -86,31 +89,27 @@ socket.on('receiveTerrain', (data) => {
     destroyedCircles = [];
     currentPlayerIndex = 0;
     isGameReady = true; 
-    isAnimating = false; // アニメーションロックも解除
+    isAnimating = false; 
     
     document.getElementById('lobbyModal').style.display = 'none';
     document.getElementById('resultModal').style.display = 'none'; 
     
+    updateScale(); // 画面サイズに合わせた倍率を計算
     updateTurnDisplay();
     updateTurnButtonState();
     drawStage();
 });
 
-// 💡 修正①：相手が撃った数式が自分の入力欄を上書きしないように修正
 socket.on('receiveFormula', (formula) => {
     logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
-    // 自分の入力欄（formulaInput.value）は書き換えず、引数として渡して実行する
     executeFireShot(formula);
 });
 
-// 💡 修正③：相手の通信が切れたら1分間のカウントダウンを開始する
 socket.on('opponentDisconnected', () => {
-    if (disconnectTimer) return; // 既にタイマーが動いていれば何もしない
+    if (disconnectTimer) return; 
 
-    logToScreen(`⚠️ 対戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
+    logToScreen(`⚠️ 对戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
     turnDisplay.innerText = "⚠️ 相手の通信切断：再接続を待機中（60秒）";
-    
-    // 相手が切れている間は操作できないようにロック
     disableControlsTemporarily();
 
     disconnectTimer = setTimeout(() => {
@@ -147,7 +146,7 @@ document.getElementById('leaveButton').addEventListener('click', () => {
 });
 
 function showResultMenu(title, message) {
-    if (disconnectTimer) clearTimeout(disconnectTimer); // タイマーが残っていれば消す
+    if (disconnectTimer) clearTimeout(disconnectTimer); 
     document.getElementById('resultTitle').innerText = title;
     document.getElementById('resultMessage').innerText = message;
     document.getElementById('resultModal').style.display = 'flex';
@@ -159,24 +158,24 @@ function disableControlsTemporarily() {
     fireBtn.style.cursor = "not-allowed";
 }
 
-// 💡 修正②：自分のターンかつ、アニメーション中でないか、相手の通信待機中でないかを厳密にチェック
 function fireShot() {
     if (!isGameReady || isAnimating || disconnectTimer) return;
-    
-    // 自分のターン（currentPlayerIndex + 1 === myPlayerId）でなければ絶対に発射させない
-    if (myPlayerId !== (currentPlayerIndex + 1)) {
-        logToScreen(`⚠️ あなたのターンではありません！`, "#ffcc00");
-        return;
-    }
+    if (myPlayerId !== (currentPlayerIndex + 1)) return;
 
     const currentFormula = formulaInput.value;
-    // 相手に数式を送る
     socket.emit('sendFormula', { roomCode: currentRoomCode, formula: currentFormula });
-    // 自分側の画面で発射処理を走らせる
     executeFireShot(currentFormula);
 }
 
-// 💡 修正①・②：数式を引数（targetFormula）として受け取る形にして独立化
+// 💡 修正：画面サイズに応じて引き伸ばす倍率（scaleFactor）をリアルタイム計算する関数
+function updateScale() {
+    if (canvas.width === 0 || canvas.height === 0) return;
+    // 画面に綺麗に収まるように、縦横比を維持した拡大縮小率を計算
+    const scaleX = canvas.width / VIRTUAL_WIDTH;
+    const scaleY = canvas.height / VIRTUAL_HEIGHT;
+    scaleFactor = Math.min(scaleX, scaleY);
+}
+
 function executeFireShot(targetFormula) {
     errorDisplay.innerText = ""; 
     const formulaString = parseFormula(targetFormula); 
@@ -195,8 +194,12 @@ function executeFireShot(targetFormula) {
         return; 
     }
     
-    const startX_Formula = (p.x - (canvas.width / 2)) / 20; 
-    const startY_Formula = ((canvas.height / 2) - p.y) / 20;
+    // 💡 修正：弾の軌道計算は画面サイズではなく固定の VIRTUAL（1200x700）の中心を基準にする
+    const vOriginX = VIRTUAL_WIDTH / 2;
+    const vOriginY = VIRTUAL_HEIGHT / 2;
+
+    const startX_Formula = (p.x - vOriginX) / 20; 
+    const startY_Formula = (vOriginY - p.y) / 20;
     let formulaY_AtPlayer = 0;
     
     try {
@@ -216,7 +219,6 @@ function executeFireShot(targetFormula) {
 
     const offsetByFormula = startY_Formula - formulaY_AtPlayer;
     
-    // 🚀 アニメーションロックをここで強制ON
     isAnimating = true; 
     disableControlsTemporarily();
     let shotPath = []; 
@@ -228,7 +230,13 @@ function executeFireShot(targetFormula) {
             frame++; currentZoom = 1.0 - (Math.sin((frame / duration) * (Math.PI / 2)) * 0.48);
             const camX = finalX; const camY = finalY;
             drawStage(camX, camY, currentZoom);
-            ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(currentZoom, currentZoom); ctx.translate(-camX, -camY);
+            
+            // シネマティック時の描画も固定座標系をベースにする
+            ctx.save(); 
+            ctx.translate(canvas.width / 2, canvas.height / 2); 
+            ctx.scale(scaleFactor * currentZoom, scaleFactor * currentZoom); 
+            ctx.translate(-camX, -camY);
+            
             ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5 / currentZoom; ctx.beginPath();
             shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
             ctx.stroke(); ctx.restore();
@@ -239,7 +247,6 @@ function executeFireShot(targetFormula) {
                 setTimeout(() => {
                     drawStage(); 
                     onComplete(); 
-                    // 💥 アニメーションが完全に終わったのでロックを解除して次のターンのボタン判定へ
                     isAnimating = false; 
                     updateTurnButtonState();
                 }, 400); 
@@ -260,8 +267,9 @@ function executeFireShot(targetFormula) {
             return; 
         }
         
-        const canvasX = (canvas.width / 2) + (currentFormulaX * 20); 
-        const canvasY = (canvas.height / 2) - (currentFormulaY * 20);
+        // 💡 修正：弾の座標自体は、画面サイズに影響されない固定の仮想座標（VIRTUAL）で計算して蓄積
+        const canvasX = vOriginX + (currentFormulaX * 20); 
+        const canvasY = vOriginY - (currentFormulaY * 20);
         
         if (isNaN(canvasX) || isNaN(canvasY) || !isFinite(canvasX) || !isFinite(canvasY)) {
             playImpactCinematic(p.x, p.y, () => { 
@@ -273,20 +281,27 @@ function executeFireShot(targetFormula) {
         
         shotPath.push({ x: canvasX, y: canvasY });
         if (t === 0) { canvas.dataset.camX = canvasX; canvas.dataset.camY = canvasY; }
-        let currentCamX = parseFloat(canvas.dataset.camX) || (canvas.width / 2); 
-        let currentCamY = parseFloat(canvas.dataset.camY) || (canvas.height / 2);
+        let currentCamX = parseFloat(canvas.dataset.camX) || vOriginX; 
+        let currentCamY = parseFloat(canvas.dataset.camY) || vOriginY;
         currentCamX += (canvasX - currentCamX) * 0.15; 
         currentCamY += (canvasY - currentCamY) * 0.15;
         canvas.dataset.camX = currentCamX; 
         canvas.dataset.camY = currentCamY;
 
         drawStage(currentCamX, currentCamY, 1.0);
-        ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.translate(-currentCamX, -currentCamY); 
+        
+        // メインアニメーション描画
+        ctx.save(); 
+        ctx.translate(canvas.width / 2, canvas.height / 2); 
+        ctx.scale(scaleFactor, scaleFactor); 
+        ctx.translate(-currentCamX, -currentCamY); 
+        
         ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5; ctx.beginPath();
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-        if (canvasX > canvas.width + 200 || canvasX < -200 || canvasY > canvas.height * 2 || canvasY < -canvas.height * 2) {
+        // 💡 修正：画面外判定も固定サイズ（VIRTUAL）基準に直す
+        if (canvasX > VIRTUAL_WIDTH + 200 || canvasX < -200 || canvasY > VIRTUAL_HEIGHT * 2 || canvasY < -VIRTUAL_HEIGHT * 2) {
             playImpactCinematic(canvasX, canvasY, () => { 
                 currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
                 updateTurnDisplay(); 
@@ -326,7 +341,7 @@ function executeFireShot(targetFormula) {
 
 function updateTurnDisplay() {
     if (myPlayerId === null || !isGameReady) return;
-    if (disconnectTimer) return; // 💡 切断待機中は表示を固定する
+    if (disconnectTimer) return; 
     let identityText = (myPlayerId === 1) ? "【あなた: PLAYER 1 (左)】" : "【あなた: PLAYER 2 (右)】";
     if (currentPlayerIndex + 1 === myPlayerId) { turnDisplay.innerText = `${identityText} あなたのターンです！`; } 
     else { turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; }
@@ -334,8 +349,6 @@ function updateTurnDisplay() {
 
 function updateTurnButtonState() {
     if (!isGameReady || disconnectTimer) { disableControlsTemporarily(); return; }
-    
-    // 💡 修正②：自分のターン、かつ弾が飛んでいない（isAnimatingがfalse）の時だけボタンを有効化
     if (!isAnimating && players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
         fireBtn.disabled = false; fireBtn.style.opacity = "1.0"; fireBtn.style.cursor = "pointer";
     } else {
@@ -351,7 +364,11 @@ function initGame() {
         canvas.width = containerRect.width || window.innerWidth;
         canvas.height = containerRect.height || window.innerHeight;
     }
-    generateTerrain(); placePlayers(); currentPlayerIndex = 0; drawStage();
+    updateScale();
+    generateTerrain(); 
+    placePlayers(); 
+    currentPlayerIndex = 0; 
+    drawStage();
 }
 
 function createExplosionEffects(ex, ey) {
@@ -370,19 +387,20 @@ function createExplosionEffects(ex, ey) {
 function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width; canvas.height = rect.height;
+    updateScale(); // 画面リサイズ（スマホを横に傾けたときなど）に追従させる
     drawStage();
 }
 
+// 💡 修正：地形のランダム生成も画面サイズではなく「1200x700」の固定サイズの中で行う
 function generateTerrain() {
     terrainCircles = []; destroyedCircles = [];
     const targetCircles = 7; let attempts = 0;
-    if (canvas.width === 0 || canvas.height === 0) return;
     while (terrainCircles.length < targetCircles && attempts < 1000) {
         attempts++;
         const newCircle = {
-            x: canvas.width * 0.1 + Math.random() * canvas.width * 0.8,
-            y: canvas.height * 0.4 + Math.random() * canvas.height * 0.4, 
-            r: 40 + Math.random() * 60 
+            x: VIRTUAL_WIDTH * 0.15 + Math.random() * VIRTUAL_WIDTH * 0.7,
+            y: VIRTUAL_HEIGHT * 0.4 + Math.random() * VIRTUAL_HEIGHT * 0.4, 
+            r: 45 + Math.random() * 65 
         };
         let tooClose = false;
         for (let c of terrainCircles) {
@@ -399,12 +417,13 @@ function isInTerrain(px, py) {
     return inAnyTerrain && !inAnyDestroyed;
 }
 
+// 💡 修正：プレイヤーの初期配置も「1200x700」の固定サイズを基準にする
 function placePlayers() {
     players = [];
     for (let i = 0; i < 2; i++) {
-        let px = (i === 0) ? canvas.width * 0.12 : canvas.width * 0.88; 
-        let py = canvas.height * 0.1; let isPlaced = false;
-        while (py < canvas.height - 20) {
+        let px = (i === 0) ? VIRTUAL_WIDTH * 0.12 : VIRTUAL_WIDTH * 0.88; 
+        let py = VIRTUAL_HEIGHT * 0.1; let isPlaced = false;
+        while (py < VIRTUAL_HEIGHT - 20) {
             if (isInTerrain(px, py)) {
                 py = py - 40; if (py < 20) py = 30;
                 players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true });
@@ -413,7 +432,7 @@ function placePlayers() {
             py++;
         }
         if (!isPlaced) {
-            players.push({ x: px, y: canvas.height * 0.4, r: 8, id: i + 1, isAlive: true });
+            players.push({ x: px, y: VIRTUAL_HEIGHT * 0.4, r: 8, id: i + 1, isAlive: true });
         }
     }
 }
@@ -428,23 +447,35 @@ function parseFormula(inputText) {
     return str;
 }
 
-function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) {
+// 💡 修正：描画関数（drawStage）。すべての座標を一度画面の中心に集め、端末の「scaleFactor」を掛けて拡大縮小する
+function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1) {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    originX = canvas.width / 2; originY = canvas.height / 2;
-    ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY);
+    
+    originX = VIRTUAL_WIDTH / 2; 
+    originY = VIRTUAL_HEIGHT / 2;
 
+    ctx.save(); 
+    // 1. まず現在の実画面サイズの中央に持っていく
+    ctx.translate(canvas.width / 2, canvas.height / 2); 
+    // 2. 端末ごとの拡大縮小率（とカメラズーム）を掛け算する
+    ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
+    // 3. カメラ位置（固定座標系）を引く
+    ctx.translate(-camX, -camY);
+
+    // グリッド線の描画
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'; ctx.lineWidth = 1;
-    for (let x = originX; x < canvas.width + 200; x += 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
-    for (let x = originX; x > -200; x -= 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
-    for (let y = originY; y < 4000; y += 40) { ctx.moveTo(-200, y); ctx.lineTo(canvas.width + 200, y); }
-    for (let y = originY; y > -2000; y -= 40) { ctx.moveTo(-200, y); ctx.lineTo(canvas.width + 200, y); }
+    for (let x = originX; x < VIRTUAL_WIDTH + 2000; x += 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
+    for (let x = originX; x > -2000; x -= 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
+    for (let y = originY; y < 4000; y += 40) { ctx.moveTo(-2000, y); ctx.lineTo(VIRTUAL_WIDTH + 2000, y); }
+    for (let y = originY; y > -2000; y -= 40) { ctx.moveTo(-2000, y); ctx.lineTo(VIRTUAL_WIDTH + 2000, y); }
     ctx.stroke();
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
     ctx.beginPath(); ctx.moveTo(-4000, originY); ctx.lineTo(6000, originY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(originX, -4000); ctx.lineTo(originX, 6000); ctx.stroke();
 
+    // 地形の描画
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
@@ -453,6 +484,7 @@ function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) 
     destroyedCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill(); ctx.restore();
 
+    // プレイヤーの描画
     players.forEach(p => {
         if (p.isAlive) {
             let finalColor = '#ffffff'; 
@@ -467,6 +499,7 @@ function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) 
         }
     });
 
+    // エフェクトの描画
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
         if (p.alpha <= 0) { explosionParticles.splice(i, 1); continue; }
@@ -494,7 +527,6 @@ document.querySelectorAll('.formula-preset').forEach(btn => {
 });
 
 fireBtn.addEventListener('click', fireShot);
-// Enterキーでの誤発射を防ぐガードを強化
 formulaInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
@@ -506,5 +538,6 @@ window.addEventListener('resize', resizeCanvas);
 window.addEventListener('load', () => {
     detectDevice();
     const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
+    updateScale();
     drawStage();
 });
