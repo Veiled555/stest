@@ -104,24 +104,14 @@ socket.on('receiveActiveUnit', (unitIndex) => {
     drawStage();
 });
 
-// サーバーから全員に「弾を撃て」という命令が届く（撃った本人にも届く）
+// サーバーから「誰かが撃った」という情報が部屋全体（自分含む）に届いた
 socket.on('receiveFormula', (data) => {
-    logToScreen(`📢 発射シーケンスを開始します。`);
-    // 相手が撃った弾の場合、その角度をデータから上書き同期
+    logToScreen(`📢 弾道計算シミュレーションを開始します。`);
     if (players[data.shooterIndex]) {
         players[data.shooterIndex].angle = data.angle;
     }
+    // 全員の画面で同時に全く同じ条件の発射関数を実行する
     executeFireShot(data.formula, data.shooterIndex, data.angle, data.startX, data.startY, data.shooterTeam);
-});
-
-// サーバーから全員に「ターン変更」が通知される
-socket.on('receiveTurnChange', (data) => {
-    currentPlayerIndex = data.nextPlayerIndex;
-    isAnimating = false;
-    selectFirstAliveUnit();
-    updateTurnDisplay();
-    updateTurnButtonState();
-    drawStage();
 });
 
 function selectFirstAliveUnit() {
@@ -176,15 +166,6 @@ document.getElementById('joinButton').addEventListener('click', () => {
     socket.emit('joinRoom', roomCode, (response) => {});
 });
 
-document.getElementById('rematchButton').addEventListener('click', () => {
-    socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
-    if (myPlayerId === 1) {
-        initGame();
-        currentPlayerIndex = Math.random() < 0.5 ? 0 : 1;
-        socket.emit('syncTerrain', { roomCode: currentRoomCode, terrain: terrainCircles, players: players, currentPlayerIndex: currentPlayerIndex, unitsPerTeam: unitsPerTeam });
-    }
-});
-
 document.getElementById('leaveButton').addEventListener('click', () => { location.reload(); });
 
 function showResultMenu(title, message) {
@@ -205,10 +186,9 @@ function fireShot() {
     const currentFormula = formulaInput.value;
     const angleInput = document.getElementById('angleInput');
     const currentAngle = angleInput ? parseFloat(angleInput.value) || 0 : 0;
-
     const p = players[selectedPlayerIndex];
 
-    // 自分自身ではすぐ動かさず、まずサーバーにパケットを送る（一斉配信で戻ってきたら動く）
+    // ローカルで即発射せず、一度サーバーに送信して「部屋全員で同時に発射」させる
     socket.emit('sendFormula', { 
         roomCode: currentRoomCode, 
         formula: currentFormula,
@@ -240,8 +220,8 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
         isAnimating = false; updateTurnButtonState(); return; 
     }
     
-    const vOriginX = VIRTUAL_WIDTH / 2;
-    const vOriginY = VIRTUAL_HEIGHT / 2;
+    const vOriginX = 600;
+    const vOriginY = 350;
 
     const rad = (-shotAngle * Math.PI) / 180;
     const cosA = Math.cos(rad);
@@ -282,7 +262,6 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
         try { 
             baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
         } catch (e) { 
-            isAnimating = false; 
             handleLocalProjectileEnd();
             return; 
         }
@@ -296,6 +275,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
         const canvasX = startX + rotatedRelX;
         const canvasY = startY + rotatedRelY;
         
+        // 画面外判定
         if (isNaN(canvasX) || !isFinite(canvasX) || canvasX > VIRTUAL_WIDTH + 300 || canvasX < -300 || canvasY > VIRTUAL_HEIGHT + 300 || canvasY < -300) {
             playImpactCinematic(startX, startY, () => { 
                 handleLocalProjectileEnd();
@@ -311,6 +291,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
+        // プレイヤーへの当たり判定
         for (let i = 0; i < players.length; i++) {
             let target = players[i];
             if (target.isAlive && !hitPlayersMap.has(i)) {
@@ -323,6 +304,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
             }
         }
         
+        // 地形への衝突判定
         if (isInTerrain(canvasX, canvasY)) {
             explode(canvasX, canvasY, 25);
             playImpactCinematic(canvasX, canvasY, () => { 
@@ -336,7 +318,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
     drawStage(startX, startY, 1.0); animate();
 }
 
-// 各端末で弾道計算が終わった際にそれぞれが自律的に実行する処理
+// 弾道計算がそれぞれの画面で終わった時に、各自の端末で独立して実行するターン変更ロジック
 function handleLocalProjectileEnd() {
     isAnimating = false;
     
@@ -353,11 +335,12 @@ function handleLocalProjectileEnd() {
         showResultMenu("GAME OVER", "PLAYER 2 (チーム黄) の勝利です！");
         isGameReady = false;
     } else {
-        // 現在のターンプレイヤーだった端末のみが代表して、サーバーに次のターンを要求する
-        if (myPlayerId === (currentPlayerIndex + 1)) {
-            const nextPlayerIndex = (currentPlayerIndex + 1) % 2;
-            socket.emit('changeTurn', { roomCode: currentRoomCode, nextPlayerIndex: nextPlayerIndex });
-        }
+        // 次のターンへ移行（お互いの画面で同時にインデックスを切り替える）
+        currentPlayerIndex = (currentPlayerIndex + 1) % 2;
+        selectFirstAliveUnit();
+        updateTurnDisplay();
+        updateTurnButtonState();
+        drawStage();
     }
 }
 
@@ -500,16 +483,14 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // 小数点以下を切り捨てて完全に固定した原点
-    const vOriginX = 600; // 1200 / 2
-    const vOriginY = 350; // 700 / 2
+    const vOriginX = 600; 
+    const vOriginY = 350; 
     
     ctx.save(); 
     ctx.translate(canvas.width / 2, canvas.height / 2); 
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-    // 細いグリッド線の描画
     ctx.strokeStyle = '#2d3238'; ctx.lineWidth = 1;
     
     for (let x = vOriginX; x <= VIRTUAL_WIDTH; x += 40) {
@@ -525,12 +506,10 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
     }
 
-    // メイン太軸（数式上の X軸・Y軸）
     ctx.strokeStyle = '#5c6370'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(0, vOriginY); ctx.lineTo(VIRTUAL_WIDTH, vOriginY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(vOriginX, 0); ctx.lineTo(vOriginX, VIRTUAL_HEIGHT); ctx.stroke();
 
-    // 地形
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
@@ -606,5 +585,3 @@ window.addEventListener('load', () => {
     const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
     updateScale(); drawStage();
 });
-
-
