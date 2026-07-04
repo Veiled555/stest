@@ -1,15 +1,14 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const fireBtn = document.getElementById('fireButton');
-const resetBtn = document.getElementById('resetBtn');
 const formulaInput = document.getElementById('formulaInput');
 const errorDisplay = document.getElementById('errorDisplay');
 const turnDisplay = document.getElementById('turnDisplay');
 const controlBar = document.getElementById('controlBar'); 
+
 const socket = io('https://stest-5wts.onrender.com', {
     transports: ['websocket']
 });
-
 
 let myPlayerId = null;
 let currentRoomCode = "";
@@ -23,12 +22,11 @@ let currentPlayerIndex = 0;
 let isAnimating = false;    
 let explosionParticles = [];
 
-// 🔧 デバッグログを画面上に強制的に書き出す関数
 function logToScreen(text, color = "#00ff00") {
     const consoleEl = document.getElementById('debugLog');
     if (consoleEl) {
         consoleEl.innerHTML += `<br><span style="color:${color};">${text}</span>`;
-        consoleEl.scrollTop = consoleEl.scrollHeight; // 常に最新のログにスクロール
+        consoleEl.scrollTop = consoleEl.scrollHeight;
     }
 }
 
@@ -48,27 +46,20 @@ socket.on('roomJoined', (data) => {
     logToScreen(`🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`);
     
     if (data.isHost) {
-        logToScreen(`👑 あなたがホストです。初期化処理を開始します...`);
-        try {
-            initGame(); 
-            logToScreen(`✨ ホストのゲーム初期化（地形生成等）が正常に完了しました！`);
-        } catch(e) {
-            logToScreen(`❌ ホスト初期化中にエラー発生: ${e.message}`, "#ff3333");
-        }
+        logToScreen(`👑 あなたがホストです。相手を待ちます...`);
+        initGame(); 
         isGameReady = false; 
         disableControlsTemporarily(); 
         turnDisplay.innerText = "対戦相手が参加するのを待っています...";
     } else {
-        logToScreen(`👥 あなたがゲストです。ホストからの地形データを待機します。`);
+        logToScreen(`👥 あなたがゲストです。ホストから地形を貰います...`);
         turnDisplay.innerText = "ホストの地形データを同期中...";
     }
 });
 
-// 2人揃った合図をサーバーから受け取ったとき
 socket.on('startSyncProcess', () => {
-    logToScreen(`📢 サーバーから「2人揃った」通知(startSyncProcess)を受信しました。`);
     if (myPlayerId === 1) {
-        logToScreen(`👥 自分がホストなので、ゲストに向けて地形データを全送信します！`);
+        logToScreen(`👥 ゲストが来ました！地形データを全送信します。`);
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
             terrain: terrainCircles,
@@ -78,35 +69,37 @@ socket.on('startSyncProcess', () => {
 });
 
 socket.on('receiveTerrain', (data) => {
-    logToScreen(`🌍 地形データをサーバー経由で受領しました。同期処理を実行します。`);
-    try {
-        terrainCircles = data.terrain;
-        players = data.players;
-        destroyedCircles = [];
-        currentPlayerIndex = 0;
-        isGameReady = true; 
-        
-        // 画面を消す処理
-        const modal = document.getElementById('lobbyModal');
-        if (modal) {
-            modal.style.display = 'none';
-            logToScreen(`🔓 lobbyModal（最初の画面）を非表示にしました。`);
-        } else {
-            logToScreen(`⚠️ エラー: lobbyModal という要素がHTMLに見つかりません！`, "#ffcc00");
-        }
-        
-        updateTurnDisplay();
-        updateTurnButtonState();
-        drawStage();
-        logToScreen(`🚀 全ての同期が完了し、ゲーム画面を描画しました！`);
-    } catch(e) {
-        logToScreen(`❌ 地形同期処理中にエラー発生: ${e.message}`, "#ff3333");
-    }
+    logToScreen(`🌍 地形が完全同期されました！ゲーム開始！`);
+    terrainCircles = data.terrain;
+    players = data.players;
+    destroyedCircles = [];
+    currentPlayerIndex = 0;
+    isGameReady = true; 
+    
+    document.getElementById('lobbyModal').style.display = 'none';
+    document.getElementById('resultModal').style.display = 'none'; // リザルトも隠す
+    
+    updateTurnDisplay();
+    updateTurnButtonState();
+    drawStage();
 });
 
 socket.on('receiveFormula', (formula) => {
     formulaInput.value = formula;
     executeFireShot();
+});
+
+// 💡 改善①：対戦相手が切断したときの処理
+socket.on('opponentDisconnected', () => {
+    logToScreen(`⚠️ 対戦相手との接続が切れました。`, "#ffcc00");
+    showResultMenu("通信切断", "対戦相手が退出、または接続が切れました。");
+    isGameReady = false;
+    disableControlsTemporarily();
+});
+
+// 💡 改善③：相手が再戦を希望したときの通知
+socket.on('opponentWantsRematch', () => {
+    logToScreen(`🔔 対戦相手が「再戦」を希望しています！`, "#ffdd00");
 });
 
 document.getElementById('joinButton').addEventListener('click', () => {
@@ -115,34 +108,40 @@ document.getElementById('joinButton').addEventListener('click', () => {
     currentRoomCode = roomCode;
 
     logToScreen(`🚀 部屋「${roomCode}」への入場リクエストを送信します...`);
-
-    // 💡 サーバーからの返事（ack）をその場で待つ仕組みに強化！
     socket.emit('joinRoom', roomCode, (response) => {
         if (response && response.status === 'ok') {
-            logToScreen(`✅ 【速報】サーバーが joinRoom を確かに受信しました！`, "#00ff00");
-        } else if (response && response.status === 'error') {
-            logToScreen(`❌ サーバー側で処理エラー発生: ${response.message}`, "#ff3333");
-        } else {
-            logToScreen(`⚠️ サーバーから予期せぬ返答がありました。`, "#ffcc00");
+            logToScreen(`✅ サーバーが要請を受信しました。`, "#00ff00");
         }
     });
 
-    // ⏳ 3秒たってもサーバーから何も返事が来ない場合の警告タイマー
     setTimeout(() => {
         if (myPlayerId === null) {
-            logToScreen(`⏰ 【警告】送信から3秒経ちましたが、サーバーから「届いたよ」の返事が一切ありません。通信が途絶しているか、サーバーがフリーズしている可能性があります。`, "#ffcc00");
+            logToScreen(`⏰ サーバーから応答がありません。再度Clear & Deployをお試しください。`, "#ffcc00");
         }
     }, 3000);
 });
 
+// 💡 改善③：リザルト画面のボタンイベント
+document.getElementById('rematchButton').addEventListener('click', () => {
+    logToScreen(`🔄 再戦リクエストを送信しました。相手の同意を待ちます...`);
+    socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
+});
+
+document.getElementById('leaveButton').addEventListener('click', () => {
+    // 完全に初期状態に戻す
+    location.reload(); 
+});
+
+function showResultMenu(title, message) {
+    document.getElementById('resultTitle').innerText = title;
+    document.getElementById('resultMessage').innerText = message;
+    document.getElementById('resultModal').style.display = 'flex';
+}
 
 function disableControlsTemporarily() {
     fireBtn.disabled = true;
     fireBtn.style.opacity = "0.5";
     fireBtn.style.cursor = "not-allowed";
-    resetBtn.disabled = true;
-    resetBtn.style.opacity = "0.5";
-    resetBtn.style.cursor = "not-allowed";
 }
 
 function createExplosionEffects(ex, ey) {
@@ -167,12 +166,7 @@ function resizeCanvas() {
 function generateTerrain() {
     terrainCircles = []; destroyedCircles = [];
     const targetCircles = 7; let attempts = 0;
-    
-    if (canvas.width === 0 || canvas.height === 0) {
-        logToScreen(`⚠️ 警告: Canvasの横幅または縦幅が0です。(W:${canvas.width}, H:${canvas.height})`, "#ffcc00");
-        return;
-    }
-    
+    if (canvas.width === 0 || canvas.height === 0) return;
     while (terrainCircles.length < targetCircles && attempts < 1000) {
         attempts++;
         const newCircle = {
@@ -187,10 +181,8 @@ function generateTerrain() {
         }
         if (!tooClose) terrainCircles.push(newCircle);
     }
-    logToScreen(`🌳 地形を生成しました。円の数: ${terrainCircles.length}個 (試行回数: ${attempts})`);
 }
 
-// (中略 - 既存のゲームロジック関数はそのまま維持して安全に動かします)
 function isInTerrain(px, py) {
     const inAnyTerrain = terrainCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
     const inAnyDestroyed = destroyedCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
@@ -214,7 +206,6 @@ function placePlayers() {
             players.push({ x: px, y: canvas.height * 0.4, r: 8, id: i + 1, isAlive: true });
         }
     }
-    logToScreen(`🏃 プレイヤーを配置しました。数: ${players.length}人`);
 }
 
 function parseFormula(inputText) {
@@ -228,7 +219,6 @@ function parseFormula(inputText) {
 }
 
 function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) {
-    if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     originX = canvas.width / 2; originY = canvas.height / 2;
     ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY);
@@ -318,7 +308,6 @@ function executeFireShot() {
             else {
                 setTimeout(() => {
                     drawStage(); onComplete(); updateTurnButtonState();
-                    if(myPlayerId === 1) { resetBtn.disabled = false; resetBtn.style.opacity = "1.0"; resetBtn.style.cursor = "pointer"; }
                 }, 400); 
             }
         }
@@ -348,14 +337,23 @@ function executeFireShot() {
             isAnimating = false; playImpactCinematic(canvasX, canvasY, () => { currentPlayerIndex = (currentPlayerIndex + 1) % 2; updateTurnDisplay(); }); return;
         }
         const targetPlayerIndex = (currentPlayerIndex + 1) % 2; const target = players[targetPlayerIndex];
+        
+        // 💡 改善③：決着がついた時にリザルトを出す
         if (target.isAlive && Math.sqrt((canvasX - target.x)**2 + (canvasY - target.y)**2) < target.r + 2) {
             target.isAlive = false; explode(canvasX, canvasY, 20); isAnimating = false;
-            playImpactCinematic(canvasX, canvasY, () => { turnDisplay.innerText = `PLAYER ${p.id} WINS!!`; }); return;
+            playImpactCinematic(canvasX, canvasY, () => { 
+                turnDisplay.innerText = `PLAYER ${p.id} WINS!!`; 
+                showResultMenu("GAME OVER", `PLAYER ${p.id} の勝利です！`);
+            }); return;
         }
         if (t > 0.8 && Math.sqrt((canvasX - p.x)**2 + (canvasY - p.y)**2) < p.r + 2) {
             p.isAlive = false; explode(canvasX, canvasY, 20); isAnimating = false;
-            playImpactCinematic(canvasX, canvasY, () => { turnDisplay.innerText = `PLAYER ${p.id} SUICIDE!`; }); return;
+            playImpactCinematic(canvasX, canvasY, () => { 
+                turnDisplay.innerText = `PLAYER ${p.id} SUICIDE!`; 
+                showResultMenu("GAME OVER", `PLAYER ${p.id} が自爆しました。`);
+            }); return;
         }
+        
         if (isInTerrain(canvasX, canvasY)) {
             explode(canvasX, canvasY, 20); isAnimating = false;
             playImpactCinematic(canvasX, canvasY, () => { currentPlayerIndex = (currentPlayerIndex + 1) % 2; updateTurnDisplay(); }); return;
@@ -377,30 +375,18 @@ function updateTurnButtonState() {
     if (players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
         fireBtn.disabled = false; fireBtn.style.opacity = "1.0"; fireBtn.style.cursor = "pointer";
     } else {
-        fireBtn.disabled = true; fireBtn.style.opacity = "0.5"; fireBtn.style.cursor = "not-allowed";
-    }
-    if (myPlayerId === 1 && !isAnimating) {
-        resetBtn.disabled = false; resetBtn.style.opacity = "1.0"; resetBtn.style.cursor = "pointer";
-    } else {
-        resetBtn.disabled = true; resetBtn.style.opacity = "0.5"; resetBtn.style.cursor = "not-allowed";
+        disableControlsTemporarily();
     }
 }
 
 function initGame() {
     isAnimating = false; errorDisplay.innerText = "";
-    
-    // 💡 iPad等で最初ここが0になって失敗するケースを防ぐため、強制的に親要素のサイズを参照する安全策
     if (canvas.width === 0 || canvas.height === 0) {
         const containerRect = document.getElementById('game').getBoundingClientRect();
         canvas.width = containerRect.width || window.innerWidth;
         canvas.height = containerRect.height || window.innerHeight;
-        logToScreen(`📏 Canvasのサイズを緊急強制設定しました (W:${canvas.width}, H:${canvas.height})`);
     }
-
-    generateTerrain(); 
-    placePlayers(); 
-    currentPlayerIndex = 0; 
-    drawStage();
+    generateTerrain(); placePlayers(); currentPlayerIndex = 0; drawStage();
 }
 
 function detectDevice() {
@@ -417,16 +403,9 @@ document.querySelectorAll('.formula-preset').forEach(btn => {
 });
 
 fireBtn.addEventListener('click', fireShot);
-resetBtn.addEventListener('click', () => {
-    if (myPlayerId === 1 && isGameReady) {
-        initGame();
-        socket.emit('syncTerrain', { roomCode: currentRoomCode, terrain: terrainCircles, players: players });
-    }
-});
 window.addEventListener('resize', resizeCanvas);
 window.addEventListener('load', () => {
     detectDevice();
     const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
     drawStage();
 });
-
