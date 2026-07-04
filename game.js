@@ -7,7 +7,7 @@ const errorDisplay = document.getElementById('errorDisplay');
 const turnDisplay = document.getElementById('turnDisplay');
 const controlBar = document.getElementById('controlBar'); 
 
-const socket = io('https://stest-5wts.onrender.com');
+const socket = io('https://stest-5wts.onrender.com/');
 
 let myPlayerId = null;
 let currentRoomCode = "";
