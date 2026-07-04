@@ -63,11 +63,10 @@ socket.on('roomJoined', (data) => {
     }
 });
 
-// 💡 改善④: 部屋がすでに満員、または対戦中の場合のサーバーからの警告を画面に表示
 socket.on('roomError', (msg) => {
     logToScreen(`⚠️ 部屋エラー: ${msg}`, "#ff3333");
     turnDisplay.innerText = `⚠️ ${msg}`;
-    alert(msg); // わかりやすいようにポップアップ警告も表示
+    alert(msg); 
 });
 
 socket.on('startSyncProcess', () => {
@@ -124,9 +123,8 @@ socket.on('opponentDisconnected', () => {
     }, DISCONNECT_TIMEOUT);
 });
 
-// 💡 改善③: 相手から再戦（リスタート）の合図が来たら、ホストが新しいステージを初期化して同期する
 socket.on('opponentWantsRematch', () => {
-    logToScreen(`🔔 対戦相手が「再戦」を希望しています！`, "#ffdd00");
+    logToScreen(`🔔 对戦相手が「再戦」を希望しています！`, "#ffdd00");
     if (myPlayerId === 1) {
         logToScreen(`👑 あなたがホストなので、新しいステージを作成してゲームを再開します...`);
         initGame();
@@ -151,7 +149,6 @@ document.getElementById('joinButton').addEventListener('click', () => {
     });
 });
 
-// 💡 改善③: 再戦ボタンを押したとき、サーバーに「再戦希望」を通知し、ホストならその場で即再生成して同期
 document.getElementById('rematchButton').addEventListener('click', () => {
     logToScreen(`🔄 再戦リクエストを送信しました...`);
     socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
@@ -183,7 +180,14 @@ function disableControlsTemporarily() {
     fireBtn.disabled = true;
     fireBtn.style.opacity = "0.5";
     fireBtn.style.cursor = "not-allowed";
-    // 💡 改善①: 相手ターン時に関数プリセットボタンの見た目も無効化する
+    
+    const angleInput = document.getElementById('angleInput');
+    if (angleInput) {
+        angleInput.disabled = true;
+        angleInput.style.opacity = "0.5";
+        angleInput.style.cursor = "not-allowed";
+    }
+
     document.querySelectorAll('.formula-preset').forEach(btn => {
         btn.style.opacity = "0.5";
         btn.style.cursor = "not-allowed";
@@ -226,6 +230,10 @@ function executeFireShot(targetFormula) {
     
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
+
+    const rad = (-(p.angle || 0) * Math.PI) / 180;
+    const cosA = Math.cos(rad);
+    const sinA = Math.sin(rad);
 
     const startX_Formula = (p.x - vOriginX) / 20; 
     const startY_Formula = (vOriginY - p.y) / 20;
@@ -283,10 +291,10 @@ function executeFireShot(targetFormula) {
     }
 
     function animate() {
-        const currentFormulaX = startX_Formula + (t * dir); 
-        let currentFormulaY;
+        const baseFormulaX = startX_Formula + (t * dir); 
+        let baseFormulaY;
         try { 
-            currentFormulaY = calculate(currentFormulaX) + offsetByFormula; 
+            baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
         } catch (e) { 
             errorDisplay.innerText = `[計算エラー]: ${e.message}`; 
             isAnimating = false; 
@@ -294,8 +302,14 @@ function executeFireShot(targetFormula) {
             return; 
         }
         
-        const canvasX = vOriginX + (currentFormulaX * 20); 
-        const canvasY = vOriginY - (currentFormulaY * 20);
+        const relX = (baseFormulaX - startX_Formula) * 20;
+        const relY = -(baseFormulaY - startY_Formula) * 20;
+        
+        const rotatedRelX = relX * cosA - relY * sinA;
+        const rotatedRelY = relX * sinA + relY * cosA;
+
+        const canvasX = p.x + rotatedRelX;
+        const canvasY = p.y + rotatedRelY;
         
         if (isNaN(canvasX) || isNaN(canvasY) || !isFinite(canvasX) || !isFinite(canvasY)) {
             playImpactCinematic(p.x, p.y, () => { 
@@ -374,14 +388,26 @@ function updateTurnDisplay() {
 function updateTurnButtonState() {
     if (!isGameReady || disconnectTimer) { disableControlsTemporarily(); return; }
     
+    const angleInput = document.getElementById('angleInput');
+
     if (!isAnimating && players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
         fireBtn.disabled = false; 
         fireBtn.style.opacity = "1.0"; 
         fireBtn.style.cursor = "pointer";
+        if (angleInput) {
+            angleInput.disabled = false;
+            angleInput.style.opacity = "1.0";
+            angleInput.style.cursor = "text";
+        }
     } else {
         fireBtn.disabled = true;
         fireBtn.style.opacity = "0.5";
         fireBtn.style.cursor = "not-allowed";
+        if (angleInput) {
+            angleInput.disabled = true;
+            angleInput.style.opacity = "0.5";
+            angleInput.style.cursor = "not-allowed";
+        }
     }
 
     document.querySelectorAll('.formula-preset').forEach(btn => {
@@ -395,7 +421,6 @@ function updateTurnButtonState() {
     });
 }
 
-
 function initGame() {
     if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
     isAnimating = false; errorDisplay.innerText = "";
@@ -408,6 +433,10 @@ function initGame() {
     generateTerrain(); 
     placePlayers(); 
     currentPlayerIndex = 0; 
+    
+    const angleInput = document.getElementById('angleInput');
+    if (angleInput) angleInput.value = "0";
+    
     drawStage();
 }
 
@@ -456,16 +485,12 @@ function isInTerrain(px, py) {
     return inAnyTerrain && !inAnyDestroyed;
 }
 
-// 💡 改善②: プレイヤー位置が水平（同じ高さ）にならないよう、X・Y座標ともに完全に高低差をバラつかせる
 function placePlayers() {
     players = [];
     
-    // グラフ座標系（中心0,0から±30）に近いイメージで、固定世界(1200x700)の中にランダム配置領域を作る
-    // PLAYER 1 (左側): Xは少し幅を持たせ、Yは上空から低空までランダムに
-    const p1BaseX = VIRTUAL_WIDTH * 0.10 + Math.random() * (VIRTUAL_WIDTH * 0.12); // Xにランダム幅
-    const p1BaseY = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.45); // Yに大きな高低差バラつき
+    const p1BaseX = VIRTUAL_WIDTH * 0.10 + Math.random() * (VIRTUAL_WIDTH * 0.12); 
+    const p1BaseY = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.45); 
 
-    // PLAYER 2 (右側): XもYも、PLAYER 1とは独立して完全に別々のランダム位置
     const p2BaseX = VIRTUAL_WIDTH * 0.78 + Math.random() * (VIRTUAL_WIDTH * 0.12);
     const p2BaseY = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.45);
 
@@ -474,19 +499,17 @@ function placePlayers() {
         let py = (i === 0) ? p1BaseY : p2BaseY; 
         let isPlaced = false;
         
-        // 空中から真下に降ろしていき、最初に見つかった地表に配置（落下処理）
         while (py < VIRTUAL_HEIGHT - 20) {
             if (isInTerrain(px, py)) {
-                py = py - 12; // 地形に少し埋まるのを防ぐ
-                players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true });
+                py = py - 12; 
+                players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true, angle: 0 });
                 isPlaced = true; break;
             }
             py += 2;
         }
-        // もし下に地形がなければ、そのランダムな空中位置にそのままスポーンさせる（浮遊スタート）
         if (!isPlaced) {
             py = (i === 0) ? p1BaseY : p2BaseY;
-            players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true });
+            players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true, angle: 0 });
         }
     }
 }
@@ -513,7 +536,6 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-    // グリッド線
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'; ctx.lineWidth = 1;
     for (let x = originX; x < VIRTUAL_WIDTH + 2000; x += 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
     for (let x = originX; x > -2000; x -= 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
@@ -525,7 +547,6 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.beginPath(); ctx.moveTo(-4000, originY); ctx.lineTo(6000, originY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(originX, -4000); ctx.lineTo(originX, 6000); ctx.stroke();
 
-    // 地形
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
@@ -534,7 +555,6 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     destroyedCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill(); ctx.restore();
 
-    // プレイヤー
     players.forEach(p => {
         if (p.isAlive) {
             let finalColor = '#ffffff'; 
@@ -543,13 +563,20 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
             else { finalColor = (p.id === 1) ? '#00ffff' : '#ffdd00'; }
 
             ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+            
             if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
-                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
+
+                const rad = ((p.angle || 0) * Math.PI) / 180;
+                const dirX = (p.id === 1) ? 1 : -1;
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.lineWidth = 2.5; ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30);
+                ctx.stroke();
             }
         }
     });
 
-    // エフェクト
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
         if (p.alpha <= 0) { explosionParticles.splice(i, 1); continue; }
@@ -576,12 +603,21 @@ document.querySelectorAll('.formula-preset').forEach(btn => {
     });
 });
 
-
 fireBtn.addEventListener('click', fireShot);
 formulaInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
         fireShot();
+    }
+});
+
+document.body.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'angleInput') {
+        const activePlayer = players[currentPlayerIndex];
+        if (activePlayer && activePlayer.id === myPlayerId) {
+            activePlayer.angle = parseFloat(e.target.value) || 0;
+            drawStage();
+        }
     }
 });
 
@@ -592,4 +628,5 @@ window.addEventListener('load', () => {
     updateScale();
     drawStage();
 });
+
 
