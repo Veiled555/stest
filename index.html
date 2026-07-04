@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>HTML5 Graphwar - Adaptive Edition</title>
     <link rel="stylesheet" href="style.css">
-    
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
@@ -20,7 +19,6 @@
     </div>
 
     <div id="game">
-        
         <div id="controlBar">
             <div class="bar-row">
                 <div id="turnDisplay">接続中...</div>
@@ -44,19 +42,31 @@
         </div>
 
         <canvas id="gameCanvas"></canvas>
-        
     </div>
 
     <script src="game.js"></script>
-    <div id="debugLog" style="position:fixed; bottom:0; left:0; width:100%; max-height:150px; overflow-y:auto; background:rgba(0,0,0,0.8); color:lime; font-size:12px; z-index:99999; pointer-events:none;"></div>
-<script>
-    window.onerror = function(msg, url, line) {
-        document.getElementById('debugLog').innerHTML += `エラー: ${msg} (行:${line})<br>`;
-    };
-    console.log = function(msg) {
-        document.getElementById('debugLog').innerHTML += `ログ: ${msg}<br>`;
-    };
-</script>
 
+    <div id="debugLog" style="position:fixed; top:0; left:0; width:100%; max-height:100px; overflow-y:auto; background:rgba(0,0,0,0.85); color:#00ff00; font-size:11px; z-index:999999; pointer-events:none; border-bottom:1px solid #00ff00; font-family:monospace; padding:5px;">[Debug Console] 起動しました。ログを待機中...</div>
+    <script>
+        window.onerror = function(msg, url, line) {
+            document.getElementById('debugLog').innerHTML += `<br><span style="color:#ff3333;font-weight:bold;">❌エラー: ${msg} (行:${line})</span>`;
+            return false;
+        };
+        console.log = function(msg) {
+            document.getElementById('debugLog').innerHTML += `<br>ℹ️ログ: ${msg}`;
+        };
+        // ボタンが押されたことを強制検知するテスト
+        window.addEventListener('load', () => {
+            const btn = document.getElementById('joinButton');
+            if(btn) {
+                btn.addEventListener('click', () => {
+                    document.getElementById('debugLog').innerHTML += `<br>🔘ボタン押下を検知しました！`;
+                });
+            } else {
+                document.getElementById('debugLog').innerHTML += `<br><span style="color:yellow;">⚠️joinButtonが見つかりません</span>`;
+            }
+        });
+    </script>
 </body>
 </html>
+
