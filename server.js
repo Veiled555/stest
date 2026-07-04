@@ -28,33 +28,41 @@ const rooms = {};
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
-    socket.on('joinRoom', (roomCode) => {
-        console.log(`User ${socket.id} is trying to join room: ${roomCode}`);
-        socket.join(roomCode);
+    
+socket.on('joinRoom', (roomCode, callback) => {
+    console.log(`User ${socket.id} is trying to join room: ${roomCode}`);
+    socket.join(roomCode);
 
-        if (!rooms[roomCode]) {
-            rooms[roomCode] = {
-                hostId: socket.id,
-                players: [socket.id],
-                terrain: null,
-                gamePlayersData: null
-            };
-            console.log(`Room ${roomCode} created by host ${socket.id}`);
-            socket.emit('roomJoined', { playerId: 1, isHost: true });
+    if (!rooms[roomCode]) {
+        rooms[roomCode] = {
+            hostId: socket.id,
+            players: [socket.id],
+            terrain: null,
+            gamePlayersData: null
+        };
+        console.log(`Room ${roomCode} created by host ${socket.id}`);
+        socket.emit('roomJoined', { playerId: 1, isHost: true });
+    } else {
+        const room = rooms[roomCode];
+        if (room.players.length < 2) {
+            room.players.push(socket.id);
+            console.log(`User ${socket.id} joined room ${roomCode} as guest`);
+            socket.emit('roomJoined', { playerId: 2, isHost: false });
+            io.to(roomCode).emit('startSyncProcess');
         } else {
-            const room = rooms[roomCode];
-            if (room.players.length < 2) {
-                room.players.push(socket.id);
-                console.log(`User ${socket.id} joined room ${roomCode} as guest`);
-                socket.emit('roomJoined', { playerId: 2, isHost: false });
-                
-                // 部屋の全員（ホストとゲスト両方）に届くように送信
-                io.to(roomCode).emit('startSyncProcess');
-            } else {
-                socket.emit('roomFull');
-            }
+            socket.emit('roomFull');
+            // 満員エラーの場合も返事をする
+            if (typeof callback === 'function') callback({ status: 'error', message: 'Room is full' });
+            return;
         }
-    });
+    }
+
+    // 💡 無事に処理が終わったら、フロントに「届いたよ！」とOKの返事を出す
+    if (typeof callback === 'function') {
+        callback({ status: 'ok' });
+    }
+});
+
 
     socket.on('syncTerrain', (data) => {
         console.log(`Received terrain sync for room ${data.roomCode}`);
