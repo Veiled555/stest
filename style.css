@@ -214,16 +214,19 @@ html, body {
 
 /* 📱 タッチデバイス対応：コントロールバーを上、キャンバスを下、ログを「下」に変更 */
 .hud-touch #controlBar {
-    order: 1;
-    border-top: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    order: 1 !important;
+    border-top: none !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15) !important;
 }
 .hud-touch #gameCanvas {
-    order: 2;
+    order: 2 !important;
 }
+
+/* 💡 ここを修正：!important をつけて、PC用の「上固定」を絶対に上書きします */
 .hud-touch #debugLog {
-    top: auto;
-    bottom: 0; /* 下に張り付き */
-    border-bottom: none;
-    border-top: 1px solid #00ff00;
+    top: auto !important;
+    bottom: 0 !important; /* 完全に画面の一番下に張り付きます */
+    border-bottom: none !important;
+    border-top: 1px solid #00ff00 !important;
 }
+
