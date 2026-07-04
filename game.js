@@ -11,6 +11,7 @@ const socket = io('https://stest-5wts.onrender.com/');
 
 let myPlayerId = null;
 let currentRoomCode = "";
+let isGameReady = false; 
 
 let originX, originY;
 let terrainCircles = [];    
@@ -19,59 +20,52 @@ let players = [];
 let currentPlayerIndex = 0; 
 let isAnimating = false;    
 let explosionParticles = [];
-// サーバーに繋がった時の処理
+
 socket.on('connect', () => {
-    turnDisplay.innerText = "接続成功。部屋を入力してください";
+    if(!myPlayerId) {
+        turnDisplay.innerText = "接続成功。部屋を入力してください";
+    }
     document.getElementById('debugLog').innerHTML += `<br>✅ サーバーとの接続線が確立しました！`;
 });
 
-// 「対戦部屋に入る」ボタンが押された時の処理
 document.getElementById('joinButton').addEventListener('click', () => {
     const roomCode = document.getElementById('roomInput').value.trim();
     if (!roomCode) return;
     currentRoomCode = roomCode;
 
     document.getElementById('debugLog').innerHTML += `<br>🚀 部屋「${roomCode}」への入場を試みます...`;
-
-    // 【修正ポイント】ボタンを押したら通信結果を待たずに、まずは強制的にゲーム画面を出します
     document.getElementById('lobbyModal').style.display = 'none';
 
-    // サーバーに「部屋に入りたい」と電波を送る
+    disableControlsTemporarily();
+    turnDisplay.innerText = "対戦相手を待っています...";
+
     socket.emit('joinRoom', roomCode);
-    
-    // 自分が最初のプレイヤー（ホスト）と仮定して一旦ゲームを初期化しておく安全弁
-    myPlayerId = 1; 
-    initGame();
 });
 
-// サーバーから「部屋への入場が正式に完了したよ」と返事が来た時の処理
 socket.on('roomJoined', (data) => {
     myPlayerId = data.playerId;
     document.getElementById('debugLog').innerHTML += `<br>🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`;
     
     if (data.isHost) {
-        document.getElementById('debugLog').innerHTML += `<br>👑 あなたがこの部屋のホストです`;
-        initGame();
-        setTimeout(() => {
-            socket.emit('syncTerrain', {
-                roomCode: currentRoomCode,
-                terrain: terrainCircles,
-                players: players
-            });
-        }, 500);
+        document.getElementById('debugLog').innerHTML += `<br>👑 あなたがこの部屋のホストです。相手の参加を待ちます...`;
+        initGame(); 
+        isGameReady = false; 
+        disableControlsTemporarily(); 
+        turnDisplay.innerText = "対戦相手が参加するのを待っています...";
     } else {
-        document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストの地形を同期中...`;
-        turnDisplay.innerText = "ホストの接続を待っています...";
+        document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストの地形データを待っています...`;
     }
 });
 
-
 socket.on('receiveTerrain', (data) => {
+    document.getElementById('debugLog').innerHTML += `<br>🌍 地形データを受信し、ゲームを開始します！`;
     terrainCircles = data.terrain;
     players = data.players;
     destroyedCircles = [];
     currentPlayerIndex = 0;
+    isGameReady = true; 
     updateTurnDisplay();
+    updateTurnButtonState();
     drawStage();
 });
 
@@ -79,6 +73,15 @@ socket.on('receiveFormula', (formula) => {
     formulaInput.value = formula;
     executeFireShot();
 });
+
+function disableControlsTemporarily() {
+    fireBtn.disabled = true;
+    fireBtn.style.opacity = "0.5";
+    fireBtn.style.cursor = "not-allowed";
+    resetBtn.disabled = true;
+    resetBtn.style.opacity = "0.5";
+    resetBtn.style.cursor = "not-allowed";
+}
 
 function createExplosionEffects(ex, ey) {
     for (let i = 0; i < 30; i++) {
@@ -136,7 +139,6 @@ function isInTerrain(px, py) {
 
 function placePlayers() {
     players = [];
-    const playerColors = ['#00ffff', '#ffdd00'];
     
     for (let i = 0; i < 2; i++) {
         let px = (i === 0) ? canvas.width * 0.12 : canvas.width * 0.88; 
@@ -147,7 +149,7 @@ function placePlayers() {
             if (isInTerrain(px, py)) {
                 py = py - 40;
                 if (py < 20) py = 30;
-                players.push({ x: px, y: py, r: 8, color: playerColors[i], id: i + 1, isAlive: true });
+                players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true });
                 isPlaced = true;
                 break;
             }
@@ -156,7 +158,7 @@ function placePlayers() {
 
         if (!isPlaced) {
             let fallbackY = canvas.height * 0.4; 
-            players.push({ x: px, y: fallbackY, r: 8, color: playerColors[i], id: i + 1, isAlive: true });
+            players.push({ x: px, y: fallbackY, r: 8, id: i + 1, isAlive: true });
         }
     }
 }
@@ -222,7 +224,16 @@ function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) 
 
     players.forEach(p => {
         if (p.isAlive) {
-            ctx.fillStyle = p.color;
+            let finalColor = '#ffffff'; 
+            if (myPlayerId === 1) {
+                finalColor = (p.id === 1) ? '#00ffff' : '#ffffff'; 
+            } else if (myPlayerId === 2) {
+                finalColor = (p.id === 2) ? '#ffdd00' : '#ffffff'; 
+            } else {
+                finalColor = (p.id === 1) ? '#00ffff' : '#ffdd00';
+            }
+
+            ctx.fillStyle = finalColor;
             ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
             if (p.id === players[currentPlayerIndex].id) {
                  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
@@ -262,7 +273,7 @@ function explode(ex, ey, er) {
 }
 
 function fireShot() {
-    if (isAnimating || !players[currentPlayerIndex].isAlive) return;
+    if (!isGameReady || isAnimating || !players[currentPlayerIndex].isAlive) return;
     if (myPlayerId !== (currentPlayerIndex + 1)) return;
 
     socket.emit('sendFormula', {
@@ -307,14 +318,7 @@ function executeFireShot() {
     const offsetByFormula = startY_Formula - formulaY_AtPlayer;
 
     isAnimating = true;
-    
-    fireBtn.disabled = true;
-    fireBtn.style.opacity = "0.5";
-    fireBtn.style.cursor = "not-allowed";
-
-    resetBtn.disabled = true;
-    resetBtn.style.opacity = "0.5";
-    resetBtn.style.cursor = "not-allowed";
+    disableControlsTemporarily();
 
     let shotPath = []; 
 
@@ -323,9 +327,7 @@ function executeFireShot() {
         let frame = 0;
         let currentZoom = 1.0;
 
-        fireBtn.disabled = true;
-        fireBtn.style.opacity = "0.5";
-        fireBtn.style.cursor = "not-allowed";
+        disableControlsTemporarily();
 
         function zoomAnimation() {
             frame++;
@@ -357,9 +359,11 @@ function executeFireShot() {
                     drawStage(); 
                     onComplete();
                     updateTurnButtonState();
-                    resetBtn.disabled = false;
-                    resetBtn.style.opacity = "1.0";
-                    resetBtn.style.cursor = "pointer";
+                    if(myPlayerId === 1) {
+                        resetBtn.disabled = false;
+                        resetBtn.style.opacity = "1.0";
+                        resetBtn.style.cursor = "pointer";
+                    }
                 }, 400); 
             }
         }
@@ -477,9 +481,9 @@ function executeFireShot() {
 }
 
 function updateTurnDisplay() {
-    if (myPlayerId === null) return;
+    if (myPlayerId === null || !isGameReady) return;
     
-    let identityText = `【あなた: PLAYER ${myPlayerId}】`;
+    let identityText = (myPlayerId === 1) ? "【あなた: PLAYER 1 (左)】" : "【あなた: PLAYER 2 (右)】";
     if (currentPlayerIndex + 1 === myPlayerId) {
         turnDisplay.innerText = `${identityText} あなたのターンです！`;
     } else {
@@ -488,6 +492,10 @@ function updateTurnDisplay() {
 }
 
 function updateTurnButtonState() {
+    if (!isGameReady) {
+        disableControlsTemporarily();
+        return;
+    }
     if (players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
         fireBtn.disabled = false;
         fireBtn.style.opacity = "1.0";
@@ -496,6 +504,16 @@ function updateTurnButtonState() {
         fireBtn.disabled = true;
         fireBtn.style.opacity = "0.5";
         fireBtn.style.cursor = "not-allowed";
+    }
+
+    if (myPlayerId === 1 && !isAnimating) {
+        resetBtn.disabled = false;
+        resetBtn.style.opacity = "1.0";
+        resetBtn.style.cursor = "pointer";
+    } else {
+        resetBtn.disabled = true;
+        resetBtn.style.opacity = "0.5";
+        resetBtn.style.cursor = "not-allowed";
     }
 }
 
@@ -511,13 +529,7 @@ function initGame() {
     placePlayers();
     
     currentPlayerIndex = 0;
-    updateTurnDisplay();
-    updateTurnButtonState();
     drawStage();
-
-    resetBtn.disabled = false;
-    resetBtn.style.opacity = "1.0";
-    resetBtn.style.cursor = "pointer";
 }
 
 function detectDevice() {
@@ -533,14 +545,14 @@ function detectDevice() {
 
 document.querySelectorAll('.formula-preset').forEach(btn => {
     btn.addEventListener('click', (e) => {
-        if (myPlayerId !== (currentPlayerIndex + 1)) return;
+        if (!isGameReady || myPlayerId !== (currentPlayerIndex + 1)) return;
         formulaInput.value = e.target.getAttribute('data-formula');
     });
 });
 
 fireBtn.addEventListener('click', fireShot);
 resetBtn.addEventListener('click', () => {
-    if (myPlayerId === 1) {
+    if (myPlayerId === 1 && isGameReady) {
         initGame();
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
@@ -558,3 +570,4 @@ window.addEventListener('load', () => {
     canvas.height = rect.height;
     drawStage();
 });
+
