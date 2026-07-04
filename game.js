@@ -56,6 +56,15 @@ socket.on('roomJoined', (data) => {
         document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストの地形データを待っています...`;
     }
 });
+// サーバーから「2人目が来たから地形データを送って！」と言われた時の処理
+socket.on('requestTerrainSync', () => {
+    document.getElementById('debugLog').innerHTML += `<br>👥 ゲストが参加しました！地形データを送信します。`;
+    socket.emit('syncTerrain', {
+        roomCode: currentRoomCode,
+        terrain: terrainCircles,
+        players: players
+    });
+});
 
 socket.on('receiveTerrain', (data) => {
     document.getElementById('debugLog').innerHTML += `<br>🌍 地形データを受信し、ゲームを開始します！`;
