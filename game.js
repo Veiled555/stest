@@ -28,20 +28,6 @@ socket.on('connect', () => {
     document.getElementById('debugLog').innerHTML += `<br>✅ サーバーとの接続線が確立しました！`;
 });
 
-document.getElementById('joinButton').addEventListener('click', () => {
-    const roomCode = document.getElementById('roomInput').value.trim();
-    if (!roomCode) return;
-    currentRoomCode = roomCode;
-
-    document.getElementById('debugLog').innerHTML += `<br>🚀 部屋「${roomCode}」への入場を試みます...`;
-    document.getElementById('lobbyModal').style.display = 'none';
-
-    disableControlsTemporarily();
-    turnDisplay.innerText = "対戦相手を待っています...";
-
-    socket.emit('joinRoom', roomCode);
-});
-
 socket.on('roomJoined', (data) => {
     myPlayerId = data.playerId;
     document.getElementById('debugLog').innerHTML += `<br>🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`;
@@ -56,7 +42,7 @@ socket.on('roomJoined', (data) => {
         document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストの地形データを待っています...`;
     }
 });
-// サーバーから「2人目が来たから地形データを送って！」と言われた時の処理
+
 socket.on('requestTerrainSync', () => {
     document.getElementById('debugLog').innerHTML += `<br>👥 ゲストが参加しました！地形データを送信します。`;
     socket.emit('syncTerrain', {
@@ -81,6 +67,20 @@ socket.on('receiveTerrain', (data) => {
 socket.on('receiveFormula', (formula) => {
     formulaInput.value = formula;
     executeFireShot();
+});
+
+document.getElementById('joinButton').addEventListener('click', () => {
+    const roomCode = document.getElementById('roomInput').value.trim();
+    if (!roomCode) return;
+    currentRoomCode = roomCode;
+
+    document.getElementById('debugLog').innerHTML += `<br>🚀 部屋「${roomCode}」への入場を試みます...`;
+    document.getElementById('lobbyModal').style.display = 'none';
+
+    disableControlsTemporarily();
+    turnDisplay.innerText = "対戦相手を待っています...";
+
+    socket.emit('joinRoom', roomCode);
 });
 
 function disableControlsTemporarily() {
@@ -148,7 +148,6 @@ function isInTerrain(px, py) {
 
 function placePlayers() {
     players = [];
-    
     for (let i = 0; i < 2; i++) {
         let px = (i === 0) ? canvas.width * 0.12 : canvas.width * 0.88; 
         let py = canvas.height * 0.1; 
@@ -579,4 +578,5 @@ window.addEventListener('load', () => {
     canvas.height = rect.height;
     drawStage();
 });
+
 
