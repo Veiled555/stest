@@ -115,8 +115,26 @@ document.getElementById('joinButton').addEventListener('click', () => {
     currentRoomCode = roomCode;
 
     logToScreen(`🚀 部屋「${roomCode}」への入場リクエストを送信します...`);
-    socket.emit('joinRoom', roomCode);
+
+    // 💡 サーバーからの返事（ack）をその場で待つ仕組みに強化！
+    socket.emit('joinRoom', roomCode, (response) => {
+        if (response && response.status === 'ok') {
+            logToScreen(`✅ 【速報】サーバーが joinRoom を確かに受信しました！`, "#00ff00");
+        } else if (response && response.status === 'error') {
+            logToScreen(`❌ サーバー側で処理エラー発生: ${response.message}`, "#ff3333");
+        } else {
+            logToScreen(`⚠️ サーバーから予期せぬ返答がありました。`, "#ffcc00");
+        }
+    });
+
+    // ⏳ 3秒たってもサーバーから何も返事が来ない場合の警告タイマー
+    setTimeout(() => {
+        if (myPlayerId === null) {
+            logToScreen(`⏰ 【警告】送信から3秒経ちましたが、サーバーから「届いたよ」の返事が一切ありません。通信が途絶しているか、サーバーがフリーズしている可能性があります。`, "#ffcc00");
+        }
+    }, 3000);
 });
+
 
 function disableControlsTemporarily() {
     fireBtn.disabled = true;
