@@ -22,6 +22,10 @@ let currentPlayerIndex = 0;
 let isAnimating = false;    
 let explosionParticles = [];
 
+// 💡 追加：切断検知用タイマーの管理変数
+let disconnectTimer = null;
+const DISCONNECT_TIMEOUT = 60000; // 1分（60秒）
+
 function logToScreen(text, color = "#00ff00") {
     const consoleEl = document.getElementById('debugLog');
     if (consoleEl) {
@@ -58,8 +62,15 @@ socket.on('roomJoined', (data) => {
 });
 
 socket.on('startSyncProcess', () => {
+    // 💡 相手が（再起動などで）戻ってきた場合はタイマーを解除する
+    if (disconnectTimer) {
+        logToScreen(`✨ 対戦相手が再接続しました。タイマーを解除します。`, "#00ff00");
+        clearTimeout(disconnectTimer);
+        disconnectTimer = null;
+    }
+
     if (myPlayerId === 1) {
-        logToScreen(`👥 ゲストが来ました！地形データを全送信します。`);
+        logToScreen(`👥 相手が揃いました。地形データを送信します。`);
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
             terrain: terrainCircles,
@@ -75,29 +86,40 @@ socket.on('receiveTerrain', (data) => {
     destroyedCircles = [];
     currentPlayerIndex = 0;
     isGameReady = true; 
+    isAnimating = false; // アニメーションロックも解除
     
     document.getElementById('lobbyModal').style.display = 'none';
-    document.getElementById('resultModal').style.display = 'none'; // リザルトも隠す
+    document.getElementById('resultModal').style.display = 'none'; 
     
     updateTurnDisplay();
     updateTurnButtonState();
     drawStage();
 });
 
+// 💡 修正①：相手が撃った数式が自分の入力欄を上書きしないように修正
 socket.on('receiveFormula', (formula) => {
-    formulaInput.value = formula;
-    executeFireShot();
+    logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
+    // 自分の入力欄（formulaInput.value）は書き換えず、引数として渡して実行する
+    executeFireShot(formula);
 });
 
-// 💡 改善①：対戦相手が切断したときの処理
+// 💡 修正③：相手の通信が切れたら1分間のカウントダウンを開始する
 socket.on('opponentDisconnected', () => {
-    logToScreen(`⚠️ 対戦相手との接続が切れました。`, "#ffcc00");
-    showResultMenu("通信切断", "対戦相手が退出、または接続が切れました。");
-    isGameReady = false;
+    if (disconnectTimer) return; // 既にタイマーが動いていれば何もしない
+
+    logToScreen(`⚠️ 対戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
+    turnDisplay.innerText = "⚠️ 相手の通信切断：再接続を待機中（60秒）";
+    
+    // 相手が切れている間は操作できないようにロック
     disableControlsTemporarily();
+
+    disconnectTimer = setTimeout(() => {
+        logToScreen(`⏰ 1分が経過しました。ゲームを終了します。`, "#ff3333");
+        showResultMenu("対戦中断", "相手の通信が1分以上途絶えたため、ゲームを終了しました。");
+        isGameReady = false;
+    }, DISCONNECT_TIMEOUT);
 });
 
-// 💡 改善③：相手が再戦を希望したときの通知
 socket.on('opponentWantsRematch', () => {
     logToScreen(`🔔 対戦相手が「再戦」を希望しています！`, "#ffdd00");
 });
@@ -113,26 +135,19 @@ document.getElementById('joinButton').addEventListener('click', () => {
             logToScreen(`✅ サーバーが要請を受信しました。`, "#00ff00");
         }
     });
-
-    setTimeout(() => {
-        if (myPlayerId === null) {
-            logToScreen(`⏰ サーバーから応答がありません。再度Clear & Deployをお試しください。`, "#ffcc00");
-        }
-    }, 3000);
 });
 
-// 💡 改善③：リザルト画面のボタンイベント
 document.getElementById('rematchButton').addEventListener('click', () => {
     logToScreen(`🔄 再戦リクエストを送信しました。相手の同意を待ちます...`);
     socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
 });
 
 document.getElementById('leaveButton').addEventListener('click', () => {
-    // 完全に初期状態に戻す
     location.reload(); 
 });
 
 function showResultMenu(title, message) {
+    if (disconnectTimer) clearTimeout(disconnectTimer); // タイマーが残っていれば消す
     document.getElementById('resultTitle').innerText = title;
     document.getElementById('resultMessage').innerText = message;
     document.getElementById('resultModal').style.display = 'flex';
@@ -142,6 +157,201 @@ function disableControlsTemporarily() {
     fireBtn.disabled = true;
     fireBtn.style.opacity = "0.5";
     fireBtn.style.cursor = "not-allowed";
+}
+
+// 💡 修正②：自分のターンかつ、アニメーション中でないか、相手の通信待機中でないかを厳密にチェック
+function fireShot() {
+    if (!isGameReady || isAnimating || disconnectTimer) return;
+    
+    // 自分のターン（currentPlayerIndex + 1 === myPlayerId）でなければ絶対に発射させない
+    if (myPlayerId !== (currentPlayerIndex + 1)) {
+        logToScreen(`⚠️ あなたのターンではありません！`, "#ffcc00");
+        return;
+    }
+
+    const currentFormula = formulaInput.value;
+    // 相手に数式を送る
+    socket.emit('sendFormula', { roomCode: currentRoomCode, formula: currentFormula });
+    // 自分側の画面で発射処理を走らせる
+    executeFireShot(currentFormula);
+}
+
+// 💡 修正①・②：数式を引数（targetFormula）として受け取る形にして独立化
+function executeFireShot(targetFormula) {
+    errorDisplay.innerText = ""; 
+    const formulaString = parseFormula(targetFormula); 
+    const p = players[currentPlayerIndex];
+    
+    let t = 0; 
+    let dir = (currentPlayerIndex === 0) ? 1 : -1;
+    let calculate;
+    
+    try { 
+        calculate = new Function('x', `return ${formulaString};`); 
+    } catch(e) { 
+        errorDisplay.innerText = `[構文エラー]: ${e.message}`; 
+        isAnimating = false;
+        updateTurnButtonState();
+        return; 
+    }
+    
+    const startX_Formula = (p.x - (canvas.width / 2)) / 20; 
+    const startY_Formula = ((canvas.height / 2) - p.y) / 20;
+    let formulaY_AtPlayer = 0;
+    
+    try {
+        formulaY_AtPlayer = calculate(startX_Formula);
+        if (isNaN(formulaY_AtPlayer) || !isFinite(formulaY_AtPlayer)) { 
+            errorDisplay.innerText = `[計算エラー]: 発射位置での値が不正です。`; 
+            isAnimating = false;
+            updateTurnButtonState();
+            return; 
+        }
+    } catch(e) { 
+        errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
+        isAnimating = false;
+        updateTurnButtonState();
+        return; 
+    }
+
+    const offsetByFormula = startY_Formula - formulaY_AtPlayer;
+    
+    // 🚀 アニメーションロックをここで強制ON
+    isAnimating = true; 
+    disableControlsTemporarily();
+    let shotPath = []; 
+
+    function playImpactCinematic(finalX, finalY, onComplete) {
+        let duration = 60; let frame = 0; let currentZoom = 1.0;
+        disableControlsTemporarily();
+        function zoomAnimation() {
+            frame++; currentZoom = 1.0 - (Math.sin((frame / duration) * (Math.PI / 2)) * 0.48);
+            const camX = finalX; const camY = finalY;
+            drawStage(camX, camY, currentZoom);
+            ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(currentZoom, currentZoom); ctx.translate(-camX, -camY);
+            ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5 / currentZoom; ctx.beginPath();
+            shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
+            ctx.stroke(); ctx.restore();
+
+            if (frame < duration) { 
+                requestAnimationFrame(zoomAnimation); 
+            } else {
+                setTimeout(() => {
+                    drawStage(); 
+                    onComplete(); 
+                    // 💥 アニメーションが完全に終わったのでロックを解除して次のターンのボタン判定へ
+                    isAnimating = false; 
+                    updateTurnButtonState();
+                }, 400); 
+            }
+        }
+        zoomAnimation();
+    }
+
+    function animate() {
+        const currentFormulaX = startX_Formula + (t * dir); 
+        let currentFormulaY;
+        try { 
+            currentFormulaY = calculate(currentFormulaX) + offsetByFormula; 
+        } catch (e) { 
+            errorDisplay.innerText = `[計算エラー]: ${e.message}`; 
+            isAnimating = false; 
+            updateTurnButtonState();
+            return; 
+        }
+        
+        const canvasX = (canvas.width / 2) + (currentFormulaX * 20); 
+        const canvasY = (canvas.height / 2) - (currentFormulaY * 20);
+        
+        if (isNaN(canvasX) || isNaN(canvasY) || !isFinite(canvasX) || !isFinite(canvasY)) {
+            playImpactCinematic(p.x, p.y, () => { 
+                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
+                updateTurnDisplay(); 
+            }); 
+            return;
+        }
+        
+        shotPath.push({ x: canvasX, y: canvasY });
+        if (t === 0) { canvas.dataset.camX = canvasX; canvas.dataset.camY = canvasY; }
+        let currentCamX = parseFloat(canvas.dataset.camX) || (canvas.width / 2); 
+        let currentCamY = parseFloat(canvas.dataset.camY) || (canvas.height / 2);
+        currentCamX += (canvasX - currentCamX) * 0.15; 
+        currentCamY += (canvasY - currentCamY) * 0.15;
+        canvas.dataset.camX = currentCamX; 
+        canvas.dataset.camY = currentCamY;
+
+        drawStage(currentCamX, currentCamY, 1.0);
+        ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.translate(-currentCamX, -currentCamY); 
+        ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5; ctx.beginPath();
+        shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
+        ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+
+        if (canvasX > canvas.width + 200 || canvasX < -200 || canvasY > canvas.height * 2 || canvasY < -canvas.height * 2) {
+            playImpactCinematic(canvasX, canvasY, () => { 
+                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
+                updateTurnDisplay(); 
+            }); 
+            return;
+        }
+        
+        const targetPlayerIndex = (currentPlayerIndex + 1) % 2; 
+        const target = players[targetPlayerIndex];
+        
+        if (target.isAlive && Math.sqrt((canvasX - target.x)**2 + (canvasY - target.y)**2) < target.r + 2) {
+            target.isAlive = false; explode(canvasX, canvasY, 20);
+            playImpactCinematic(canvasX, canvasY, () => { 
+                turnDisplay.innerText = `PLAYER ${p.id} WINS!!`; 
+                showResultMenu("GAME OVER", `PLAYER ${p.id} の勝利です！`);
+            }); return;
+        }
+        if (t > 0.8 && Math.sqrt((canvasX - p.x)**2 + (canvasY - p.y)**2) < p.r + 2) {
+            p.isAlive = false; explode(canvasX, canvasY, 20);
+            playImpactCinematic(canvasX, canvasY, () => { 
+                turnDisplay.innerText = `PLAYER ${p.id} SUICIDE!`; 
+                showResultMenu("GAME OVER", `PLAYER ${p.id} が自爆しました。`);
+            }); return;
+        }
+        
+        if (isInTerrain(canvasX, canvasY)) {
+            explode(canvasX, canvasY, 20);
+            playImpactCinematic(canvasX, canvasY, () => { 
+                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
+                updateTurnDisplay(); 
+            }); return;
+        }
+        t += 0.15; requestAnimationFrame(animate);
+    }
+    drawStage(p.x, p.y, 1.0); animate();
+}
+
+function updateTurnDisplay() {
+    if (myPlayerId === null || !isGameReady) return;
+    if (disconnectTimer) return; // 💡 切断待機中は表示を固定する
+    let identityText = (myPlayerId === 1) ? "【あなた: PLAYER 1 (左)】" : "【あなた: PLAYER 2 (右)】";
+    if (currentPlayerIndex + 1 === myPlayerId) { turnDisplay.innerText = `${identityText} あなたのターンです！`; } 
+    else { turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; }
+}
+
+function updateTurnButtonState() {
+    if (!isGameReady || disconnectTimer) { disableControlsTemporarily(); return; }
+    
+    // 💡 修正②：自分のターン、かつ弾が飛んでいない（isAnimatingがfalse）の時だけボタンを有効化
+    if (!isAnimating && players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
+        fireBtn.disabled = false; fireBtn.style.opacity = "1.0"; fireBtn.style.cursor = "pointer";
+    } else {
+        disableControlsTemporarily();
+    }
+}
+
+function initGame() {
+    if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
+    isAnimating = false; errorDisplay.innerText = "";
+    if (canvas.width === 0 || canvas.height === 0) {
+        const containerRect = document.getElementById('game').getBoundingClientRect();
+        canvas.width = containerRect.width || window.innerWidth;
+        canvas.height = containerRect.height || window.innerHeight;
+    }
+    generateTerrain(); placePlayers(); currentPlayerIndex = 0; drawStage();
 }
 
 function createExplosionEffects(ex, ey) {
@@ -219,6 +429,7 @@ function parseFormula(inputText) {
 }
 
 function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) {
+    if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     originX = canvas.width / 2; originY = canvas.height / 2;
     ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(zoom, zoom); ctx.translate(-camX, -camY);
@@ -250,7 +461,7 @@ function drawStage(camX = canvas.width / 2, camY = canvas.height / 2, zoom = 1) 
             else { finalColor = (p.id === 1) ? '#00ffff' : '#ffdd00'; }
 
             ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-            if (p.id === players[currentPlayerIndex].id) {
+            if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
                  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
             }
         }
@@ -269,126 +480,6 @@ function explode(ex, ey, er) {
     createExplosionEffects(ex, ey);
 }
 
-function fireShot() {
-    if (!isGameReady || isAnimating || !players[currentPlayerIndex].isAlive) return;
-    if (myPlayerId !== (currentPlayerIndex + 1)) return;
-    socket.emit('sendFormula', { roomCode: currentRoomCode, formula: formulaInput.value });
-    executeFireShot();
-}
-
-function executeFireShot() {
-    errorDisplay.innerText = ""; const formulaString = parseFormula(formulaInput.value); const p = players[currentPlayerIndex];
-    let t = 0; let dir = (currentPlayerIndex === 0) ? 1 : -1;
-    let calculate;
-    try { calculate = new Function('x', `return ${formulaString};`); } catch(e) { errorDisplay.innerText = `[構文エラー]: ${e.message}`; return; }
-    const startX_Formula = (p.x - (canvas.width / 2)) / 20; const startY_Formula = ((canvas.height / 2) - p.y) / 20;
-    let formulaY_AtPlayer = 0;
-    try {
-        formulaY_AtPlayer = calculate(startX_Formula);
-        if (isNaN(formulaY_AtPlayer) || !isFinite(formulaY_AtPlayer)) { errorDisplay.innerText = `[計算エラー]: 発射位置での値が不正です。`; return; }
-    } catch(e) { errorDisplay.innerText = `[実行エラー]: ${e.message}`; return; }
-
-    const offsetByFormula = startY_Formula - formulaY_AtPlayer;
-    isAnimating = true; disableControlsTemporarily();
-    let shotPath = []; 
-
-    function playImpactCinematic(finalX, finalY, onComplete) {
-        let duration = 60; let frame = 0; let currentZoom = 1.0;
-        disableControlsTemporarily();
-        function zoomAnimation() {
-            frame++; currentZoom = 1.0 - (Math.sin((frame / duration) * (Math.PI / 2)) * 0.48);
-            const camX = finalX; const camY = finalY;
-            drawStage(camX, camY, currentZoom);
-            ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.scale(currentZoom, currentZoom); ctx.translate(-camX, -camY);
-            ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5 / currentZoom; ctx.beginPath();
-            shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
-            ctx.stroke(); ctx.restore();
-
-            if (frame < duration) { requestAnimationFrame(zoomAnimation); } 
-            else {
-                setTimeout(() => {
-                    drawStage(); onComplete(); updateTurnButtonState();
-                }, 400); 
-            }
-        }
-        zoomAnimation();
-    }
-
-    function animate() {
-        const currentFormulaX = startX_Formula + (t * dir); let currentFormulaY;
-        try { currentFormulaY = calculate(currentFormulaX) + offsetByFormula; } catch (e) { errorDisplay.innerText = `[計算エラー]: ${e.message}`; isAnimating = false; return; }
-        const canvasX = (canvas.width / 2) + (currentFormulaX * 20); const canvasY = (canvas.height / 2) - (currentFormulaY * 20);
-        if (isNaN(canvasX) || isNaN(canvasY) || !isFinite(canvasX) || !isFinite(canvasY)) {
-            isAnimating = false; drawStage(); currentPlayerIndex = (currentPlayerIndex + 1) % 2; updateTurnDisplay(); return;
-        }
-        shotPath.push({ x: canvasX, y: canvasY });
-        if (t === 0) { canvas.dataset.camX = canvasX; canvas.dataset.camY = canvasY; }
-        let currentCamX = parseFloat(canvas.dataset.camX) || (canvas.width / 2); let currentCamY = parseFloat(canvas.dataset.camY) || (canvas.height / 2);
-        currentCamX += (canvasX - currentCamX) * 0.15; currentCamY += (canvasY - currentCamY) * 0.15;
-        canvas.dataset.camX = currentCamX; canvas.dataset.camY = currentCamY;
-
-        drawStage(currentCamX, currentCamY, 1.0);
-        ctx.save(); ctx.translate(canvas.width / 2, canvas.height / 2); ctx.translate(-currentCamX, -currentCamY); 
-        ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5; ctx.beginPath();
-        shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
-        ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-
-        if (canvasX > canvas.width + 200 || canvasX < -200 || canvasY > canvas.height * 2 || canvasY < -canvas.height * 2) {
-            isAnimating = false; playImpactCinematic(canvasX, canvasY, () => { currentPlayerIndex = (currentPlayerIndex + 1) % 2; updateTurnDisplay(); }); return;
-        }
-        const targetPlayerIndex = (currentPlayerIndex + 1) % 2; const target = players[targetPlayerIndex];
-        
-        // 💡 改善③：決着がついた時にリザルトを出す
-        if (target.isAlive && Math.sqrt((canvasX - target.x)**2 + (canvasY - target.y)**2) < target.r + 2) {
-            target.isAlive = false; explode(canvasX, canvasY, 20); isAnimating = false;
-            playImpactCinematic(canvasX, canvasY, () => { 
-                turnDisplay.innerText = `PLAYER ${p.id} WINS!!`; 
-                showResultMenu("GAME OVER", `PLAYER ${p.id} の勝利です！`);
-            }); return;
-        }
-        if (t > 0.8 && Math.sqrt((canvasX - p.x)**2 + (canvasY - p.y)**2) < p.r + 2) {
-            p.isAlive = false; explode(canvasX, canvasY, 20); isAnimating = false;
-            playImpactCinematic(canvasX, canvasY, () => { 
-                turnDisplay.innerText = `PLAYER ${p.id} SUICIDE!`; 
-                showResultMenu("GAME OVER", `PLAYER ${p.id} が自爆しました。`);
-            }); return;
-        }
-        
-        if (isInTerrain(canvasX, canvasY)) {
-            explode(canvasX, canvasY, 20); isAnimating = false;
-            playImpactCinematic(canvasX, canvasY, () => { currentPlayerIndex = (currentPlayerIndex + 1) % 2; updateTurnDisplay(); }); return;
-        }
-        t += 0.15; requestAnimationFrame(animate);
-    }
-    drawStage(p.x, p.y, 1.0); animate();
-}
-
-function updateTurnDisplay() {
-    if (myPlayerId === null || !isGameReady) return;
-    let identityText = (myPlayerId === 1) ? "【あなた: PLAYER 1 (左)】" : "【あなた: PLAYER 2 (右)】";
-    if (currentPlayerIndex + 1 === myPlayerId) { turnDisplay.innerText = `${identityText} あなたのターンです！`; } 
-    else { turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; }
-}
-
-function updateTurnButtonState() {
-    if (!isGameReady) { disableControlsTemporarily(); return; }
-    if (players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
-        fireBtn.disabled = false; fireBtn.style.opacity = "1.0"; fireBtn.style.cursor = "pointer";
-    } else {
-        disableControlsTemporarily();
-    }
-}
-
-function initGame() {
-    isAnimating = false; errorDisplay.innerText = "";
-    if (canvas.width === 0 || canvas.height === 0) {
-        const containerRect = document.getElementById('game').getBoundingClientRect();
-        canvas.width = containerRect.width || window.innerWidth;
-        canvas.height = containerRect.height || window.innerHeight;
-    }
-    generateTerrain(); placePlayers(); currentPlayerIndex = 0; drawStage();
-}
-
 function detectDevice() {
     const gameContainer = document.getElementById('game');
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) { gameContainer.classList.add('hud-touch'); } 
@@ -397,12 +488,20 @@ function detectDevice() {
 
 document.querySelectorAll('.formula-preset').forEach(btn => {
     btn.addEventListener('click', (e) => {
-        if (!isGameReady || myPlayerId !== (currentPlayerIndex + 1)) return;
+        if (!isGameReady || myPlayerId !== (currentPlayerIndex + 1) || isAnimating) return;
         formulaInput.value = e.target.getAttribute('data-formula');
     });
 });
 
 fireBtn.addEventListener('click', fireShot);
+// Enterキーでの誤発射を防ぐガードを強化
+formulaInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        fireShot();
+    }
+});
+
 window.addEventListener('resize', resizeCanvas);
 window.addEventListener('load', () => {
     detectDevice();
