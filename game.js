@@ -103,7 +103,6 @@ socket.on('receiveTerrain', (data) => {
 socket.on('receiveActiveUnit', (unitIndex) => {
     const opponentTeam = (myPlayerId === 1) ? 2 : 1;
     if (players[unitIndex] && players[unitIndex].team === opponentTeam) {
-        logToScreen(`🎯 相手がユニットを変更しました。`);
         drawStage();
     }
 });
@@ -135,7 +134,8 @@ function selectFirstAliveUnit() {
 }
 
 canvas.addEventListener('click', (e) => {
-    if (!isGameReady || isAnimating || myPlayerId !== (currentPlayerIndex + 1)) return;
+    // アニメーション中、またはゲーム開始前は入力をガード
+    if (!isGameReady || isAnimating) return;
 
     const rect = canvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
@@ -149,6 +149,7 @@ canvas.addEventListener('click', (e) => {
 
     for (let i = 0; i < players.length; i++) {
         const p = players[i];
+        // ターンに関係なく、「自分のチーム」かつ「生存しているユニット」なら選択可能に
         if (p.team === myPlayerId && p.isAlive) {
             const dist = Math.sqrt((mouseVX - p.x)**2 + (mouseVY - p.y)**2);
             if (dist < p.r + 20) { 
@@ -158,6 +159,7 @@ canvas.addEventListener('click', (e) => {
                 const angleInput = document.getElementById('angleInput');
                 if (angleInput) angleInput.value = p.angle || 0;
 
+                // サーバー経由で相手画面にも「自分が今どのユニットを選択しているか」をリアルタイム同期
                 socket.emit('selectUnit', { roomCode: currentRoomCode, unitIndex: i });
                 
                 drawStage();
@@ -166,6 +168,7 @@ canvas.addEventListener('click', (e) => {
         }
     }
 });
+
 
 document.getElementById('joinButton').addEventListener('click', () => {
     const roomCode = document.getElementById('roomInput').value.trim();
@@ -280,7 +283,8 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
             baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
         } catch (e) { 
             isAnimating = false; 
-            if (myPlayerId === (currentPlayerIndex + 1)) triggerNextTurn(); 
+            // 双方の画面でアニメーション終了時にターン遷移ロジックを呼ぶ
+            checkGameEnd(); 
             return; 
         }
         
@@ -293,10 +297,10 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         const canvasX = p.x + rotatedRelX;
         const canvasY = p.y + rotatedRelY;
         
-        // 限界判定（グリッド表示外までカバー）
+        // 限界判定（画面の境界外までをカバー）
         if (isNaN(canvasX) || !isFinite(canvasX) || canvasX > VIRTUAL_WIDTH + 400 || canvasX < -400 || canvasY > VIRTUAL_HEIGHT + 400 || canvasY < -400) {
             playImpactCinematic(p.x, p.y, () => { 
-                if (myPlayerId === (currentPlayerIndex + 1)) checkGameEnd(); 
+                checkGameEnd(); 
             }); 
             return;
         }
@@ -324,7 +328,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         if (isInTerrain(canvasX, canvasY)) {
             explode(canvasX, canvasY, 25);
             playImpactCinematic(canvasX, canvasY, () => { 
-                if (myPlayerId === (currentPlayerIndex + 1)) checkGameEnd(); 
+                checkGameEnd(); 
             }); 
             return;
         }
@@ -335,8 +339,11 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
 }
 
 function triggerNextTurn() {
-    const nextPlayerIndex = (currentPlayerIndex + 1) % 2;
-    socket.emit('changeTurn', { roomCode: currentRoomCode, nextPlayerIndex: nextPlayerIndex });
+    // ターン変更をリクエストできるのは、弾を撃った本人の送信端末のみにする（二重送信防止）
+    if (myPlayerId === (currentPlayerIndex + 1)) {
+        const nextPlayerIndex = (currentPlayerIndex + 1) % 2;
+        socket.emit('changeTurn', { roomCode: currentRoomCode, nextPlayerIndex: nextPlayerIndex });
+    }
 }
 
 function checkGameEnd() {
@@ -496,25 +503,25 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    const vOriginX = VIRTUAL_WIDTH / 2; 
-    const vOriginY = VIRTUAL_HEIGHT / 2;
+    const vOriginX = Math.floor(VIRTUAL_WIDTH / 2); 
+    const vOriginY = Math.floor(VIRTUAL_HEIGHT / 2);
     
     ctx.save(); 
     ctx.translate(canvas.width / 2, canvas.height / 2); 
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-    // グリッド背景の描画（中心原点から左右上下に正確に展開）
+    // グリッド背景の描画（中心原点[vOriginX, vOriginY]から完全に正確に展開）
     ctx.strokeStyle = '#2d3238'; ctx.lineWidth = 1;
     
-    // 縦線の描画 (X軸中心から左右へ)
+    // 縦線
     for (let x = vOriginX; x <= VIRTUAL_WIDTH; x += 40) {
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, VIRTUAL_HEIGHT); ctx.stroke();
     }
     for (let x = vOriginX - 40; x >= 0; x -= 40) {
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, VIRTUAL_HEIGHT); ctx.stroke();
     }
-    // 横線の描画 (Y軸中心から上下へ)
+    // 横線
     for (let y = vOriginY; y <= VIRTUAL_HEIGHT; y += 40) {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
     }
@@ -522,7 +529,7 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
     }
 
-    // 中心軸 (X軸・Y軸)
+    // メイン中心太軸 (X軸・Y軸)
     ctx.strokeStyle = '#5c6370'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(0, vOriginY); ctx.lineTo(VIRTUAL_WIDTH, vOriginY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(vOriginX, 0); ctx.lineTo(vOriginX, VIRTUAL_HEIGHT); ctx.stroke();
@@ -606,4 +613,5 @@ window.addEventListener('load', () => {
     const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
     updateScale(); drawStage();
 });
+
 
