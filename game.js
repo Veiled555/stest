@@ -110,6 +110,14 @@ socket.on('receiveFormula', (data) => {
     executeFireShot(data.formula, data.shooterIndex, data.angle);
 });
 
+socket.on('receiveTurnChange', (data) => {
+    currentPlayerIndex = data.nextPlayerIndex;
+    selectFirstAliveUnit();
+    updateTurnDisplay();
+    updateTurnButtonState();
+    drawStage();
+});
+
 function selectFirstAliveUnit() {
     selectedPlayerIndex = null;
     for (let i = 0; i < players.length; i++) {
@@ -139,7 +147,7 @@ canvas.addEventListener('click', (e) => {
         const p = players[i];
         if (p.team === myPlayerId && p.isAlive) {
             const dist = Math.sqrt((mouseVX - p.x)**2 + (mouseVY - p.y)**2);
-            if (dist < p.r + 25) { 
+            if (dist < p.r + 20) { 
                 selectedPlayerIndex = i;
                 logToScreen(`🎯 ユニット選択変更: Unit [${i}]`);
                 
@@ -228,7 +236,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
 
-    const rad = (shotAngle * Math.PI) / 180;
+    const rad = (-shotAngle * Math.PI) / 180;
     const cosA = Math.cos(rad);
     const sinA = Math.sin(rad);
 
@@ -277,7 +285,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         const canvasY = p.y + rotatedRelY;
         
         if (isNaN(canvasX) || !isFinite(canvasX)) {
-            playImpactCinematic(p.x, p.y, () => { nextTurn(); }); return;
+            playImpactCinematic(p.x, p.y, () => { triggerNextTurn(); }); return;
         }
         
         shotPath.push({ x: canvasX, y: canvasY });
@@ -289,7 +297,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
         if (canvasX > VIRTUAL_WIDTH + 300 || canvasX < -300 || canvasY > VIRTUAL_HEIGHT * 2 || canvasY < -VIRTUAL_HEIGHT * 2) {
-            playImpactCinematic(canvasX, canvasY, () => { nextTurn(); }); return;
+            playImpactCinematic(canvasX, canvasY, () => { triggerNextTurn(); }); return;
         }
         
         for (let target of players) {
@@ -306,20 +314,18 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         
         if (isInTerrain(canvasX, canvasY)) {
             explode(canvasX, canvasY, 25);
-            playImpactCinematic(canvasX, canvasY, () => { nextTurn(); }); return;
+            playImpactCinematic(canvasX, canvasY, () => { triggerNextTurn(); }); return;
         }
         t += 0.15; requestAnimationFrame(animate);
     }
     drawStage(p.x, p.y, 1.0); animate();
 }
 
-// 💡 (このコメントだけ残します。処理上必要な関数のため)
-function nextTurn() {
-    currentPlayerIndex = (currentPlayerIndex + 1) % 2;
-    selectFirstAliveUnit();
-    updateTurnDisplay();
-    updateTurnButtonState();
-    drawStage();
+function triggerNextTurn() {
+    if (myPlayerId === (currentPlayerIndex + 1)) {
+        const nextPlayerIndex = (currentPlayerIndex + 1) % 2;
+        socket.emit('changeTurn', { roomCode: currentRoomCode, nextPlayerIndex: nextPlayerIndex });
+    }
 }
 
 function checkGameEnd() {
@@ -336,7 +342,7 @@ function checkGameEnd() {
         showResultMenu("GAME OVER", "PLAYER 2 (チーム黄) の勝利です！");
         isGameReady = false;
     } else {
-        nextTurn();
+        triggerNextTurn();
     }
 }
 
@@ -401,35 +407,68 @@ function isInTerrain(px, py) {
 function placePlayers() {
     players = [];
     const UNITS_PER_TEAM = 3;
+    const MIN_DISTANCE = 60;
 
     for (let k = 0; k < UNITS_PER_TEAM; k++) {
-        let px = VIRTUAL_WIDTH * 0.06 + Math.random() * (VIRTUAL_WIDTH * 0.22);
-        let py = VIRTUAL_HEIGHT * 0.10 + Math.random() * (VIRTUAL_HEIGHT * 0.55);
-        let isPlaced = false;
-        while (py < VIRTUAL_HEIGHT - 20) {
+        let px, py, valid;
+        let attempts = 0;
+        do {
+            valid = true;
+            attempts++;
+            px = VIRTUAL_WIDTH * 0.05 + Math.random() * (VIRTUAL_WIDTH * 0.25);
+            py = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.7);
+
             if (isInTerrain(px, py)) {
-                py = py - 12;
-                players.push({ x: px, y: py, r: 9, team: 1, isAlive: true, angle: 0 });
-                isPlaced = true; break;
+                valid = false;
+                continue;
             }
-            py += 2;
-        }
-        if (!isPlaced) players.push({ x: px, y: VIRTUAL_HEIGHT * 0.3, r: 9, team: 1, isAlive: true, angle: 0 });
+            for (let tc of terrainCircles) {
+                let distToTerrain = Math.sqrt((px - tc.x)**2 + (py - tc.y)**2);
+                if (distToTerrain < tc.r + 25) {
+                    valid = false;
+                    break;
+                }
+            }
+            for (let existing of players) {
+                let distToPlayer = Math.sqrt((px - existing.x)**2 + (py - existing.y)**2);
+                if (distToPlayer < MIN_DISTANCE) {
+                    valid = false;
+                    break;
+                }
+            }
+        } while (!valid && attempts < 200);
+        players.push({ x: px, y: py, r: 9, team: 1, isAlive: true, angle: 0 });
     }
 
     for (let k = 0; k < UNITS_PER_TEAM; k++) {
-        let px = VIRTUAL_WIDTH * 0.72 + Math.random() * (VIRTUAL_WIDTH * 0.22);
-        let py = VIRTUAL_HEIGHT * 0.10 + Math.random() * (VIRTUAL_HEIGHT * 0.55);
-        let isPlaced = false;
-        while (py < VIRTUAL_HEIGHT - 20) {
+        let px, py, valid;
+        let attempts = 0;
+        do {
+            valid = true;
+            attempts++;
+            px = VIRTUAL_WIDTH * 0.70 + Math.random() * (VIRTUAL_WIDTH * 0.25);
+            py = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.7);
+
             if (isInTerrain(px, py)) {
-                py = py - 12;
-                players.push({ x: px, y: py, r: 9, team: 2, isAlive: true, angle: 0 });
-                isPlaced = true; break;
+                valid = false;
+                continue;
             }
-            py += 2;
-        }
-        if (!isPlaced) players.push({ x: px, y: VIRTUAL_HEIGHT * 0.3, r: 9, team: 2, isAlive: true, angle: 0 });
+            for (let tc of terrainCircles) {
+                let distToTerrain = Math.sqrt((px - tc.x)**2 + (py - tc.y)**2);
+                if (distToTerrain < tc.r + 25) {
+                    valid = false;
+                    break;
+                }
+            }
+            for (let existing of players) {
+                let distToPlayer = Math.sqrt((px - existing.x)**2 + (py - existing.y)**2);
+                if (distToPlayer < MIN_DISTANCE) {
+                    valid = false;
+                    break;
+                }
+            }
+        } while (!valid && attempts < 200);
+        players.push({ x: px, y: py, r: 9, team: 2, isAlive: true, angle: 0 });
     }
 }
 
@@ -447,11 +486,25 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    originX = VIRTUAL_WIDTH / 2; originY = VIRTUAL_HEIGHT / 2;
+    const vOriginX = VIRTUAL_WIDTH / 2; 
+    const vOriginY = VIRTUAL_HEIGHT / 2;
+    
     ctx.save(); 
     ctx.translate(canvas.width / 2, canvas.height / 2); 
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
+
+    ctx.strokeStyle = '#2d3238'; ctx.lineWidth = 1;
+    for (let x = 0; x <= VIRTUAL_WIDTH; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, VIRTUAL_HEIGHT); ctx.stroke();
+    }
+    for (let y = 0; y <= VIRTUAL_HEIGHT; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
+    }
+
+    ctx.strokeStyle = '#5c6370'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, vOriginY); ctx.lineTo(VIRTUAL_WIDTH, vOriginY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(vOriginX, 0); ctx.lineTo(vOriginX, VIRTUAL_HEIGHT); ctx.stroke();
 
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
