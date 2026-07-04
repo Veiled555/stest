@@ -132,8 +132,7 @@ html, body {
     background: #ff5588;
 }
 
-/* 📥 最初の画面（部屋選択ポップアップ）の見た目 */
-#lobbyModal {
+.modal-layer {
     position: fixed;
     inset: 0;
     width: 100%;
@@ -142,7 +141,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 99999; /* 最前面に表示 */
+    z-index: 99999;
 }
 
 .lobby-box {
@@ -195,7 +194,25 @@ html, body {
     background: #ff5588;
 }
 
-/* 📱 タッチデバイス対応 */
+/* 🔍 改善④：通常時（PCなど）はログを画面「上」に固定 */
+#debugLog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-height: 90px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.85);
+    color: #00ff00;
+    font-size: 11px;
+    z-index: 999999;
+    pointer-events: none;
+    border-bottom: 1px solid #00ff00;
+    font-family: monospace;
+    padding: 5px;
+}
+
+/* 📱 タッチデバイス対応：コントロールバーを上、キャンバスを下、ログを「下」に変更 */
 .hud-touch #controlBar {
     order: 1;
     border-top: none;
@@ -203,4 +220,10 @@ html, body {
 }
 .hud-touch #gameCanvas {
     order: 2;
+}
+.hud-touch #debugLog {
+    top: auto;
+    bottom: 0; /* 下に張り付き */
+    border-bottom: none;
+    border-top: 1px solid #00ff00;
 }
