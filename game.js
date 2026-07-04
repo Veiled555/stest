@@ -101,35 +101,20 @@ socket.on('receiveTerrain', (data) => {
 });
 
 socket.on('receiveActiveUnit', (unitIndex) => {
-    // 相手がユニットを変更した通知。描画だけ更新
     drawStage();
 });
 
-// 相手が弾を撃った時のリアルタイム弾道描画トリガー
+// サーバーから全員に「弾を撃て」という命令が届く（撃った本人にも届く）
 socket.on('receiveFormula', (data) => {
-    logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
+    logToScreen(`📢 発射シーケンスを開始します。`);
+    // 相手が撃った弾の場合、その角度をデータから上書き同期
+    if (players[data.shooterIndex]) {
+        players[data.shooterIndex].angle = data.angle;
+    }
     executeFireShot(data.formula, data.shooterIndex, data.angle, data.startX, data.startY, data.shooterTeam);
 });
 
-// 相手の画面で弾の処理（着弾・消滅）がすべて終わった時の同期処理
-socket.on('receiveProjectileExplosion', (data) => {
-    destroyedCircles = data.destroyedCircles;
-    players = data.players;
-    
-    if (data.isGameOver) {
-        showResultMenu(data.resultTitle, data.resultMessage);
-        isGameReady = false;
-        isAnimating = false;
-    } else {
-        currentPlayerIndex = data.nextPlayerIndex;
-        isAnimating = false;
-        selectFirstAliveUnit();
-        updateTurnDisplay();
-        updateTurnButtonState();
-        drawStage();
-    }
-});
-
+// サーバーから全員に「ターン変更」が通知される
 socket.on('receiveTurnChange', (data) => {
     currentPlayerIndex = data.nextPlayerIndex;
     isAnimating = false;
@@ -166,7 +151,6 @@ canvas.addEventListener('click', (e) => {
 
     for (let i = 0; i < players.length; i++) {
         const p = players[i];
-        // 相手のターン中であっても、自分のチームの生存ユニットなら自由に切り替え可能
         if (p.team === myPlayerId && p.isAlive) {
             const dist = Math.sqrt((mouseVX - p.x)**2 + (mouseVY - p.y)**2);
             if (dist < p.r + 20) { 
@@ -223,9 +207,8 @@ function fireShot() {
     const currentAngle = angleInput ? parseFloat(angleInput.value) || 0 : 0;
 
     const p = players[selectedPlayerIndex];
-    p.angle = currentAngle;
 
-    // 発射位置の絶対座標（p.x, p.y）およびチーム情報をパッケージして送信
+    // 自分自身ではすぐ動かさず、まずサーバーにパケットを送る（一斉配信で戻ってきたら動く）
     socket.emit('sendFormula', { 
         roomCode: currentRoomCode, 
         formula: currentFormula,
@@ -235,8 +218,6 @@ function fireShot() {
         startY: p.y,
         shooterTeam: p.team
     });
-
-    executeFireShot(currentFormula, selectedPlayerIndex, currentAngle, p.x, p.y, p.team);
 }
 
 function updateScale() {
@@ -244,7 +225,6 @@ function updateScale() {
     scaleFactor = Math.min(canvas.width / VIRTUAL_WIDTH, canvas.height / VIRTUAL_HEIGHT);
 }
 
-// 引数に発射座標（startX, startY）とチーム（shooterTeam）を明示的に受け取る構造に拡張
 function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY, shooterTeam) {
     errorDisplay.innerText = ""; 
     const formulaString = parseFormula(targetFormula); 
@@ -267,7 +247,6 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
     const cosA = Math.cos(rad);
     const sinA = Math.sin(rad);
 
-    // 送られてきた絶対座標を基準に数式空間上の初期位置を算出（完璧な同期のため）
     const startX_Formula = (startX - vOriginX) / 20; 
     const startY_Formula = (vOriginY - startY) / 20;
     let formulaY_AtPlayer = 0;
@@ -304,7 +283,7 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
             baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
         } catch (e) { 
             isAnimating = false; 
-            if (myPlayerId === (currentPlayerIndex + 1)) handleProjectileEnd();
+            handleLocalProjectileEnd();
             return; 
         }
         
@@ -317,10 +296,9 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
         const canvasX = startX + rotatedRelX;
         const canvasY = startY + rotatedRelY;
         
-        // 画面外の判定限界
         if (isNaN(canvasX) || !isFinite(canvasX) || canvasX > VIRTUAL_WIDTH + 300 || canvasX < -300 || canvasY > VIRTUAL_HEIGHT + 300 || canvasY < -300) {
             playImpactCinematic(startX, startY, () => { 
-                if (myPlayerId === (currentPlayerIndex + 1)) handleProjectileEnd();
+                handleLocalProjectileEnd();
             }); 
             return;
         }
@@ -333,25 +311,22 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-        // 当たり判定処理
         for (let i = 0; i < players.length; i++) {
             let target = players[i];
             if (target.isAlive && !hitPlayersMap.has(i)) {
-                // 発射直後の自ユニットへの自爆防止
                 if (t < 0.8 && target.x === startX && target.y === startY) continue;
                 if (Math.sqrt((canvasX - target.x)**2 + (canvasY - target.y)**2) < target.r + 4) {
                     target.isAlive = false; 
                     hitPlayersMap.add(i);
-                    explode(canvasX, canvasY, 20); // 爆発エフェクト生成
+                    explode(canvasX, canvasY, 20);
                 }
             }
         }
         
-        // 地形衝突判定
         if (isInTerrain(canvasX, canvasY)) {
             explode(canvasX, canvasY, 25);
             playImpactCinematic(canvasX, canvasY, () => { 
-                if (myPlayerId === (currentPlayerIndex + 1)) handleProjectileEnd();
+                handleLocalProjectileEnd();
             }); 
             return;
         }
@@ -361,36 +336,29 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle, startX, startY,
     drawStage(startX, startY, 1.0); animate();
 }
 
-// 弾の全処理が終わった際、発射側プレイヤーの端末が代表してゲーム状況を判定し、サーバーへ同期パケットを投げる
-function handleProjectileEnd() {
+// 各端末で弾道計算が終わった際にそれぞれが自律的に実行する処理
+function handleLocalProjectileEnd() {
+    isAnimating = false;
+    
     const team1Alive = players.some(p => p.team === 1 && p.isAlive);
     const team2Alive = players.some(p => p.team === 2 && p.isAlive);
-    
-    let isGameOver = false;
-    let resultTitle = "";
-    let resultMessage = "";
-    let nextPlayerIndex = currentPlayerIndex;
 
     if (!team1Alive && !team2Alive) {
-        isGameOver = true; resultTitle = "GAME OVER"; resultMessage = "まさかの引き分け（相打ち）です！";
+        showResultMenu("GAME OVER", "まさかの引き分け（相打ち）です！");
+        isGameReady = false;
     } else if (!team2Alive) {
-        isGameOver = true; resultTitle = "GAME OVER"; resultMessage = "PLAYER 1 (チーム青) の勝利です！";
+        showResultMenu("GAME OVER", "PLAYER 1 (チーム青) の勝利です！");
+        isGameReady = false;
     } else if (!team1Alive) {
-        isGameOver = true; resultTitle = "GAME OVER"; resultMessage = "PLAYER 2 (チーム黄) の勝利です！";
+        showResultMenu("GAME OVER", "PLAYER 2 (チーム黄) の勝利です！");
+        isGameReady = false;
     } else {
-        nextPlayerIndex = (currentPlayerIndex + 1) % 2;
+        // 現在のターンプレイヤーだった端末のみが代表して、サーバーに次のターンを要求する
+        if (myPlayerId === (currentPlayerIndex + 1)) {
+            const nextPlayerIndex = (currentPlayerIndex + 1) % 2;
+            socket.emit('changeTurn', { roomCode: currentRoomCode, nextPlayerIndex: nextPlayerIndex });
+        }
     }
-
-    // 確定した地形・プレイヤー生存状態・次のターン情報を一斉送信
-    socket.emit('projectileExploded', {
-        roomCode: currentRoomCode,
-        destroyedCircles: destroyedCircles,
-        players: players,
-        nextPlayerIndex: nextPlayerIndex,
-        isGameOver: isGameOver,
-        resultTitle: resultTitle,
-        resultMessage: resultMessage
-    });
 }
 
 function updateTurnDisplay() {
@@ -532,14 +500,16 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    const vOriginX = Math.floor(VIRTUAL_WIDTH / 2); 
-    const vOriginY = Math.floor(VIRTUAL_HEIGHT / 2);
+    // 小数点以下を切り捨てて完全に固定した原点
+    const vOriginX = 600; // 1200 / 2
+    const vOriginY = 350; // 700 / 2
     
     ctx.save(); 
     ctx.translate(canvas.width / 2, canvas.height / 2); 
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
+    // 細いグリッド線の描画
     ctx.strokeStyle = '#2d3238'; ctx.lineWidth = 1;
     
     for (let x = vOriginX; x <= VIRTUAL_WIDTH; x += 40) {
@@ -555,10 +525,12 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
     }
 
+    // メイン太軸（数式上の X軸・Y軸）
     ctx.strokeStyle = '#5c6370'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(0, vOriginY); ctx.lineTo(VIRTUAL_WIDTH, vOriginY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(vOriginX, 0); ctx.lineTo(vOriginX, VIRTUAL_HEIGHT); ctx.stroke();
 
+    // 地形
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
