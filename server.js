@@ -20,6 +20,20 @@ const rooms = {};
 
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
+    // server.js の socket.on('connection', (socket) => { ... }) の中に追加してください
+
+socket.on('projectileExploded', (data) => {
+    // 発射側から着弾報告を受け取ったら、部屋の全員（相手側）に通知してステージ状態（破壊データ等）を確定させる
+    socket.to(data.roomCode).emit('receiveProjectileExplosion', {
+        destroyedCircles: data.destroyedCircles,
+        players: data.players,
+        nextPlayerIndex: data.nextPlayerIndex,
+        isGameOver: data.isGameOver,
+        resultTitle: data.resultTitle,
+        resultMessage: data.resultMessage
+    });
+});
+
 
     socket.on('joinRoom', (roomCode, callback) => {
         socket.join(roomCode);
