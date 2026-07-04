@@ -9,12 +9,21 @@
 </head>
 <body>
 
-    <div id="lobbyModal">
+    <div id="lobbyModal" class="modal-layer">
         <div class="lobby-box">
             <h2>Graphwar Online</h2>
             <p>友達と同じ「合言葉」を入力してください</p>
             <input type="text" id="roomInput" value="ひみつの部屋"><br>
             <button id="joinButton">対戦部屋に入る</button>
+        </div>
+    </div>
+
+    <div id="resultModal" class="modal-layer" style="display: none;">
+        <div class="lobby-box">
+            <h2 id="resultTitle">GAME OVER</h2>
+            <p id="resultMessage">対戦が終了しました</p>
+            <button id="rematchButton" style="margin-bottom: 10px; background: #4a7c59;">もう一度対戦（再戦）</button>
+            <button id="leaveButton" style="background: #444;">最初の画面へ戻る</button>
         </div>
     </div>
 
@@ -31,8 +40,7 @@
                     <input type="text" id="formulaInput" value="6 * sin(x / 5)">
                 </div>
                 <button id="fireButton">発射！</button>
-                <button class="key" id="resetBtn">リセット</button>
-            </div>
+                </div>
 
             <div id="buttons">
                 <button class="key formula-preset" data-formula="3 * abs(x - 10)">絶対値関数</button>
@@ -44,17 +52,15 @@
         <canvas id="gameCanvas"></canvas>
     </div>
 
-    <div id="debugLog" style="position:fixed; top:0; left:0; width:100%; max-height:100px; overflow-y:auto; background:rgba(0,0,0,0.85); color:#00ff00; font-size:11px; z-index:999999; pointer-events:none; border-bottom:1px solid #00ff00; font-family:monospace; padding:5px;">[Debug Console] 起動しました。ログを待機中...</div>
+    <div id="debugLog">[Debug Console] 起動しました。ログを待機中...</div>
 
     <script src="game.js"></script>
 
     <script>
         window.onerror = function(msg, url, line) {
-            document.getElementById('debugLog').innerHTML += `<br><span style="color:#ff3333;font-weight:bold;">❌エラー: ${msg} (行:${line})</span>`;
+            const logEl = document.getElementById('debugLog');
+            if(logEl) logEl.innerHTML += `<br><span style="color:#ff3333;font-weight:bold;">❌エラー: ${msg} (行:${line})</span>`;
             return false;
-        };
-        console.log = function(msg) {
-            document.getElementById('debugLog').innerHTML += `<br>ℹ️ログ: ${msg}`;
         };
     </script>
 </body>
