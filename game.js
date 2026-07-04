@@ -19,23 +19,38 @@ let players = [];
 let currentPlayerIndex = 0; 
 let isAnimating = false;    
 let explosionParticles = [];
-
+// サーバーに繋がった時の処理
 socket.on('connect', () => {
     turnDisplay.innerText = "接続成功。部屋を入力してください";
+    document.getElementById('debugLog').innerHTML += `<br>✅ サーバーとの接続線が確立しました！`;
 });
 
+// 「対戦部屋に入る」ボタンが押された時の処理
 document.getElementById('joinButton').addEventListener('click', () => {
     const roomCode = document.getElementById('roomInput').value.trim();
     if (!roomCode) return;
     currentRoomCode = roomCode;
+
+    document.getElementById('debugLog').innerHTML += `<br>🚀 部屋「${roomCode}」への入場を試みます...`;
+
+    // 【修正ポイント】ボタンを押したら通信結果を待たずに、まずは強制的にゲーム画面を出します
+    document.getElementById('lobbyModal').style.display = 'none';
+
+    // サーバーに「部屋に入りたい」と電波を送る
     socket.emit('joinRoom', roomCode);
+    
+    // 自分が最初のプレイヤー（ホスト）と仮定して一旦ゲームを初期化しておく安全弁
+    myPlayerId = 1; 
+    initGame();
 });
 
+// サーバーから「部屋への入場が正式に完了したよ」と返事が来た時の処理
 socket.on('roomJoined', (data) => {
     myPlayerId = data.playerId;
-    document.getElementById('lobbyModal').style.display = 'none';
+    document.getElementById('debugLog').innerHTML += `<br>🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`;
     
     if (data.isHost) {
+        document.getElementById('debugLog').innerHTML += `<br>👑 あなたがこの部屋のホストです`;
         initGame();
         setTimeout(() => {
             socket.emit('syncTerrain', {
@@ -45,9 +60,11 @@ socket.on('roomJoined', (data) => {
             });
         }, 500);
     } else {
+        document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストの地形を同期中...`;
         turnDisplay.innerText = "ホストの接続を待っています...";
     }
 });
+
 
 socket.on('receiveTerrain', (data) => {
     terrainCircles = data.terrain;
