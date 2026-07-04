@@ -14,12 +14,11 @@ let myPlayerId = null;
 let currentRoomCode = "";
 let isGameReady = false; 
 
-// 💡 修正：すべての端末で共通のゲーム世界サイズ（基準値）を定義
+// 💡 修正：共通のゲーム世界サイズ（1200x700の不変のフィールド）
 const VIRTUAL_WIDTH = 1200;
 const VIRTUAL_HEIGHT = 700;
-let scaleFactor = 1; // 画面サイズに合わせるための倍率
+let scaleFactor = 1; 
 
-let originX, originY;
 let terrainCircles = [];    
 let destroyedCircles = [];  
 let players = [];           
@@ -94,7 +93,7 @@ socket.on('receiveTerrain', (data) => {
     document.getElementById('lobbyModal').style.display = 'none';
     document.getElementById('resultModal').style.display = 'none'; 
     
-    updateScale(); // 画面サイズに合わせた倍率を計算
+    updateScale(); 
     updateTurnDisplay();
     updateTurnButtonState();
     drawStage();
@@ -108,7 +107,7 @@ socket.on('receiveFormula', (formula) => {
 socket.on('opponentDisconnected', () => {
     if (disconnectTimer) return; 
 
-    logToScreen(`⚠️ 对戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
+    logToScreen(`⚠️ 対戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
     turnDisplay.innerText = "⚠️ 相手の通信切断：再接続を待機中（60秒）";
     disableControlsTemporarily();
 
@@ -167,12 +166,12 @@ function fireShot() {
     executeFireShot(currentFormula);
 }
 
-// 💡 修正：画面サイズに応じて引き伸ばす倍率（scaleFactor）をリアルタイム計算する関数
+// 💡 修正：どのような端末（縦長・横長）でも、必ず1200x700が画面にきれいに収まる比率を計算
 function updateScale() {
     if (canvas.width === 0 || canvas.height === 0) return;
-    // 画面に綺麗に収まるように、縦横比を維持した拡大縮小率を計算
     const scaleX = canvas.width / VIRTUAL_WIDTH;
     const scaleY = canvas.height / VIRTUAL_HEIGHT;
+    // 小さい方の比率に合わせることで、画面外にはみ出すのを完全に防ぎます
     scaleFactor = Math.min(scaleX, scaleY);
 }
 
@@ -194,7 +193,7 @@ function executeFireShot(targetFormula) {
         return; 
     }
     
-    // 💡 修正：弾の軌道計算は画面サイズではなく固定の VIRTUAL（1200x700）の中心を基準にする
+    // 数式の基準となるグラフの原点（0, 0）は、固定世界の「真ん中」
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
 
@@ -228,14 +227,14 @@ function executeFireShot(targetFormula) {
         disableControlsTemporarily();
         function zoomAnimation() {
             frame++; currentZoom = 1.0 - (Math.sin((frame / duration) * (Math.PI / 2)) * 0.48);
-            const camX = finalX; const camY = finalY;
-            drawStage(camX, camY, currentZoom);
             
-            // シネマティック時の描画も固定座標系をベースにする
+            // 💡 修正：シネマティックカメラもデバイスのスケールをかけた上で中央にカチッと合わせる
+            drawStage(finalX, finalY, currentZoom);
+            
             ctx.save(); 
             ctx.translate(canvas.width / 2, canvas.height / 2); 
             ctx.scale(scaleFactor * currentZoom, scaleFactor * currentZoom); 
-            ctx.translate(-camX, -camY);
+            ctx.translate(-finalX, -finalY);
             
             ctx.strokeStyle = '#ff3366'; ctx.lineWidth = 2.5 / currentZoom; ctx.beginPath();
             shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
@@ -267,7 +266,6 @@ function executeFireShot(targetFormula) {
             return; 
         }
         
-        // 💡 修正：弾の座標自体は、画面サイズに影響されない固定の仮想座標（VIRTUAL）で計算して蓄積
         const canvasX = vOriginX + (currentFormulaX * 20); 
         const canvasY = vOriginY - (currentFormulaY * 20);
         
@@ -290,7 +288,6 @@ function executeFireShot(targetFormula) {
 
         drawStage(currentCamX, currentCamY, 1.0);
         
-        // メインアニメーション描画
         ctx.save(); 
         ctx.translate(canvas.width / 2, canvas.height / 2); 
         ctx.scale(scaleFactor, scaleFactor); 
@@ -300,7 +297,6 @@ function executeFireShot(targetFormula) {
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(canvasX, canvasY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-        // 💡 修正：画面外判定も固定サイズ（VIRTUAL）基準に直す
         if (canvasX > VIRTUAL_WIDTH + 200 || canvasX < -200 || canvasY > VIRTUAL_HEIGHT * 2 || canvasY < -VIRTUAL_HEIGHT * 2) {
             playImpactCinematic(canvasX, canvasY, () => { 
                 currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
@@ -387,20 +383,20 @@ function createExplosionEffects(ex, ey) {
 function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width; canvas.height = rect.height;
-    updateScale(); // 画面リサイズ（スマホを横に傾けたときなど）に追従させる
+    updateScale(); 
     drawStage();
 }
 
-// 💡 修正：地形のランダム生成も画面サイズではなく「1200x700」の固定サイズの中で行う
 function generateTerrain() {
     terrainCircles = []; destroyedCircles = [];
     const targetCircles = 7; let attempts = 0;
     while (terrainCircles.length < targetCircles && attempts < 1000) {
         attempts++;
         const newCircle = {
-            x: VIRTUAL_WIDTH * 0.15 + Math.random() * VIRTUAL_WIDTH * 0.7,
-            y: VIRTUAL_HEIGHT * 0.4 + Math.random() * VIRTUAL_HEIGHT * 0.4, 
-            r: 45 + Math.random() * 65 
+            // 💡 修正：どんな端末でも必ず全体が見えるよう、中央寄りの安全圏（1200x700の内側）に生成
+            x: VIRTUAL_WIDTH * 0.2 + Math.random() * VIRTUAL_WIDTH * 0.6,
+            y: VIRTUAL_HEIGHT * 0.35 + Math.random() * VIRTUAL_HEIGHT * 0.45, 
+            r: 45 + Math.random() * 60 
         };
         let tooClose = false;
         for (let c of terrainCircles) {
@@ -417,7 +413,6 @@ function isInTerrain(px, py) {
     return inAnyTerrain && !inAnyDestroyed;
 }
 
-// 💡 修正：プレイヤーの初期配置も「1200x700」の固定サイズを基準にする
 function placePlayers() {
     players = [];
     for (let i = 0; i < 2; i++) {
@@ -447,7 +442,7 @@ function parseFormula(inputText) {
     return str;
 }
 
-// 💡 修正：描画関数（drawStage）。すべての座標を一度画面の中心に集め、端末の「scaleFactor」を掛けて拡大縮小する
+// 💡 修正：中心のズレを完全解消するための中心固定描画
 function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1) {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -456,14 +451,14 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     originY = VIRTUAL_HEIGHT / 2;
 
     ctx.save(); 
-    // 1. まず現在の実画面サイズの中央に持っていく
+    // 1. どんな端末であっても、描画の基準点を「画面の完全な中心」に持ってきます
     ctx.translate(canvas.width / 2, canvas.height / 2); 
-    // 2. 端末ごとの拡大縮小率（とカメラズーム）を掛け算する
+    // 2. 算出した全画面フィット倍率（scaleFactor）を適用
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
-    // 3. カメラ位置（固定座標系）を引く
+    // 3. 固定世界の中心を基準にしてカメラ位置を相殺（これでズレがゼロになります）
     ctx.translate(-camX, -camY);
 
-    // グリッド線の描画
+    // グリッド線
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)'; ctx.lineWidth = 1;
     for (let x = originX; x < VIRTUAL_WIDTH + 2000; x += 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
     for (let x = originX; x > -2000; x -= 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
@@ -475,7 +470,7 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.beginPath(); ctx.moveTo(-4000, originY); ctx.lineTo(6000, originY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(originX, -4000); ctx.lineTo(originX, 6000); ctx.stroke();
 
-    // 地形の描画
+    // 地形
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
@@ -484,7 +479,7 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     destroyedCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill(); ctx.restore();
 
-    // プレイヤーの描画
+    // プレイヤー
     players.forEach(p => {
         if (p.isAlive) {
             let finalColor = '#ffffff'; 
@@ -499,7 +494,7 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
         }
     });
 
-    // エフェクトの描画
+    // エフェクト
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
         if (p.alpha <= 0) { explosionParticles.splice(i, 1); continue; }
