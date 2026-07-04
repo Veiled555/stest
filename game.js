@@ -7,7 +7,6 @@ const errorDisplay = document.getElementById('errorDisplay');
 const turnDisplay = document.getElementById('turnDisplay');
 const controlBar = document.getElementById('controlBar'); 
 
-// ⚠️ あなたのRenderサーバーのURLです。末尾の / は無しで統一します
 const socket = io('https://stest-5wts.onrender.com');
 
 let myPlayerId = null;
@@ -29,7 +28,6 @@ socket.on('connect', () => {
     document.getElementById('debugLog').innerHTML += `<br>✅ サーバーと通信が繋がりました！`;
 });
 
-// サーバーから「部屋への入場完了」の返事が来たとき
 socket.on('roomJoined', (data) => {
     myPlayerId = data.playerId;
     document.getElementById('debugLog').innerHTML += `<br>🎉 正式に部屋に入りました (PLAYER ${myPlayerId})`;
@@ -42,20 +40,22 @@ socket.on('roomJoined', (data) => {
         turnDisplay.innerText = "対戦相手が参加するのを待っています...";
     } else {
         document.getElementById('debugLog').innerHTML += `<br>👥 あなたがゲストです。ホストから地形を貰います...`;
+        turnDisplay.innerText = "ホストの地形データを同期中...";
     }
 });
 
-// ホスト側：サーバーから「ゲストが来たから地形送って」と言われたとき
-socket.on('requestTerrainSync', () => {
-    document.getElementById('debugLog').innerHTML += `<br>👥 ゲストの進入を検知！地形データを送信します。`;
-    socket.emit('syncTerrain', {
-        roomCode: currentRoomCode,
-        terrain: terrainCircles,
-        players: players
-    });
+// 2人揃った合図をサーバーから受け取ったとき
+socket.on('startSyncProcess', () => {
+    if (myPlayerId === 1) {
+        document.getElementById('debugLog').innerHTML += `<br>👥 ゲストが来ました！地形データを全送信します。`;
+        socket.emit('syncTerrain', {
+            roomCode: currentRoomCode,
+            terrain: terrainCircles,
+            players: players
+        });
+    }
 });
 
-// ゲスト側＆ホスト側：最終的に地形データが揃ってゲームがスタートするとき
 socket.on('receiveTerrain', (data) => {
     document.getElementById('debugLog').innerHTML += `<br>🌍 地形が完全同期されました！ゲーム開始！`;
     terrainCircles = data.terrain;
@@ -64,7 +64,6 @@ socket.on('receiveTerrain', (data) => {
     currentPlayerIndex = 0;
     isGameReady = true; 
     
-    // モダル（ポップアップ）をここで確実に非表示にする
     document.getElementById('lobbyModal').style.display = 'none';
     
     updateTurnDisplay();
@@ -72,13 +71,11 @@ socket.on('receiveTerrain', (data) => {
     drawStage();
 });
 
-// 相手が数式を撃った通信を受け取ったとき
 socket.on('receiveFormula', (formula) => {
     formulaInput.value = formula;
     executeFireShot();
 });
 
-// ボタンのクリックイベント（これひとつで部屋へリクエストを送る）
 document.getElementById('joinButton').addEventListener('click', () => {
     const roomCode = document.getElementById('roomInput').value.trim();
     if (!roomCode) return;
