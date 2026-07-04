@@ -9,49 +9,41 @@ const io = require('socket.io')(http, {
     transports: ['websocket']
 });
 
+// 部屋の状態を管理するオブジェクト
 const rooms = {};
 
 io.on('connection', (socket) => {
     console.log(`User connected: ${socket.id}`);
 
-    // 部屋への参加
+    // 部屋に参加する
     socket.on('joinRoom', (roomCode, callback) => {
         socket.join(roomCode);
         
         if (!rooms[roomCode]) {
             rooms[roomCode] = { host: socket.id, guests: [] };
-            callback({ playerId: 1, isHost: true });
+            if (typeof callback === 'function') callback({ playerId: 1, isHost: true });
         } else {
             rooms[roomCode].guests.push(socket.id);
-            callback({ playerId: 2, isHost: false });
-            // 2人揃ったら同期プロセスを開始
+            if (typeof callback === 'function') callback({ playerId: 2, isHost: false });
+            
+            // 2人揃ったら、その部屋の全員に同期開始の合図を送る
             io.to(roomCode).emit('startSyncProcess');
         }
     });
 
-    // 地形と初期配置の同期（ホストからゲストへ）
+    // ホストから送られた初期地形・プレイヤー配置を部屋の全員（ホスト・ゲスト両方）に一斉送信
     socket.on('syncTerrain', (data) => {
         io.to(data.roomCode).emit('receiveTerrain', data);
     });
 
-    // ユニット選択の同期
+    // ユニット選択のリアルタイム同期（自分以外に送信）
     socket.on('selectUnit', (data) => {
         socket.to(data.roomCode).emit('receiveActiveUnit', data.unitIndex);
     });
 
-    // 【重要】数式と発射の同期（部屋の全員へ io.to で一斉配信）
+    // 【重要】撃った数式データを、その部屋の全員（自分も含めて）に一斉送信
     socket.on('sendFormula', (data) => {
         io.to(data.roomCode).emit('receiveFormula', data);
-    });
-
-    // 【重要】ターン変更の同期（部屋の全員へ io.to で一斉配信）
-    socket.on('changeTurn', (data) => {
-        io.to(data.roomCode).emit('receiveTurnChange', data);
-    });
-
-    // リマッチ請求
-    socket.on('requestRematch', (data) => {
-        socket.to(data.roomCode).emit('startSyncProcess');
     });
 
     socket.on('disconnect', () => {
@@ -59,6 +51,7 @@ io.on('connection', (socket) => {
     });
 });
 
+// Renderのポート対応
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
