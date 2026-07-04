@@ -126,7 +126,7 @@ socket.on('opponentDisconnected', () => {
 socket.on('opponentWantsRematch', () => {
     logToScreen(`🔔 对戦相手が「再戦」を希望しています！`, "#ffdd00");
     if (myPlayerId === 1) {
-        logToScreen(`👑 あなたがホストなので、新しいステージを作成してゲームを再開します...`);
+        logToScreen(`👑 あなたがホストので、新しいステージを作成してゲームを再開します...`);
         initGame();
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
@@ -217,17 +217,39 @@ function updateScale() {
     scaleFactor = Math.min(scaleX, scaleY);
 }
 
+function parseFormula(inputText) {
+    let str = inputText.toLowerCase().replace(/\s+/g, '');
+    
+    if (str.startsWith('y=') && !str.includes("y'")) str = str.substring(2);
+    if (str.startsWith("y'=") || str.startsWith("y''=")) {
+        str = str.split('=')[1];
+    }
+
+    str = str.replace(/sin/g, 'Math.sin').replace(/cos/g, 'Math.cos').replace(/tan/g, 'Math.tan');
+    str = str.replace(/abs/g, 'Math.abs').replace(/exp/g, 'Math.exp').replace(/sqrt/g, 'Math.sqrt').replace(/pi/g, 'Math.PI');
+    str = str.replace(/log/g, 'Math.log10').replace(/ln/g, 'Math.log');
+    
+    str = str.replace(/\(([^()]+)\)\^([0-9.]+)/g, 'Math.pow(($1),$2)').replace(/([x0-9.y]+)\^([0-9.-]+)/g, 'Math.pow($1,$2)');
+    str = str.replace(/(?<!Math\.)pow/g, 'Math.pow').replace(/([0-9])([a-z(])/g, '$1*$2').replace(/\)([0-9a-z])/g, ')*$1').replace(/x\(/g, 'x*(');
+    return str;
+}
+
 function executeFireShot(targetFormula) {
     errorDisplay.innerText = ""; 
+    const isFirstDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
+    const isSecondDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y''=");
     const formulaString = parseFormula(targetFormula); 
     const p = players[currentPlayerIndex];
     
-    let t = 0; 
-    let dir = (currentPlayerIndex === 0) ? 1 : -1;
     let calculate;
-    
     try { 
-        calculate = new Function('x', `return ${formulaString};`); 
+        if (isSecondDeriv) {
+            calculate = new Function('x', 'y', 'dy', `return ${formulaString};`);
+        } else if (isFirstDeriv) {
+            calculate = new Function('x', 'y', `return ${formulaString};`);
+        } else {
+            calculate = new Function('x', `return ${formulaString};`); 
+        }
     } catch(e) { 
         errorDisplay.innerText = `[構文エラー]: ${e.message}`; 
         isAnimating = false;
@@ -241,28 +263,35 @@ function executeFireShot(targetFormula) {
     const rad = (p.angle || 0) * Math.PI / 180;
     const cosA = Math.cos(rad);
     const sinA = Math.sin(rad);
+    const dir = (currentPlayerIndex === 0) ? 1 : -1;
+
+    let t = 0; 
+    const step = 0.15;
+    let currentX_Formula = 0;
+    let currentY_Formula = 0;
+    let currentDY_Formula = 0; 
 
     const startX_Formula = (p.x - vOriginX) / 20; 
     const startY_Formula = (vOriginY - p.y) / 20;
-    let formulaY_AtPlayer = 0;
-    
-    try {
-        formulaY_AtPlayer = calculate(startX_Formula);
-        if (isNaN(formulaY_AtPlayer) || !isFinite(formulaY_AtPlayer)) { 
-            errorDisplay.innerText = `[計算エラー]: 発射位置での値が不正です。`; 
-            isAnimating = false;
-            updateTurnButtonState();
-            return; 
+
+    if (!isFirstDeriv && !isSecondDeriv) {
+        try {
+            const initialVal = calculate(startX_Formula);
+            if (isNaN(initialVal) || !isFinite(initialVal)) { 
+                errorDisplay.innerText = `[計算エラー]: 発射位置での値が不正です。`; 
+                isAnimating = false; updateTurnButtonState(); return; 
+            }
+        } catch(e) { 
+            errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
+            isAnimating = false; updateTurnButtonState(); return; 
         }
-    } catch(e) { 
-        errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
-        isAnimating = false;
-        updateTurnButtonState();
-        return; 
+    } else if (isFirstDeriv) {
+        currentY_Formula = startY_Formula;
+    } else if (isSecondDeriv) {
+        currentY_Formula = startY_Formula;
+        currentDY_Formula = 0; 
     }
 
-    const offsetByFormula = startY_Formula - formulaY_AtPlayer;
-    
     isAnimating = true; 
     disableControlsTemporarily();
     let shotPath = []; 
@@ -298,22 +327,33 @@ function executeFireShot(targetFormula) {
     }
 
     function animate() {
-        const baseFormulaX = startX_Formula + (t * dir); 
-        let baseFormulaY;
-        try { 
-            baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
+        let relX_standard = t * dir;
+        let relY_standard = 0;
+
+        currentX_Formula = startX_Formula + relX_standard;
+
+        try {
+            if (isSecondDeriv) {
+                let ddy = calculate(currentX_Formula, currentY_Formula, currentDY_Formula);
+                currentDY_Formula += ddy * step * dir;
+                currentY_Formula += currentDY_Formula * step * dir;
+                relY_standard = -(currentY_Formula - startY_Formula);
+            } else if (isFirstDeriv) {
+                let dy = calculate(currentX_Formula, currentY_Formula);
+                currentY_Formula += dy * step * dir;
+                relY_standard = -(currentY_Formula - startY_Formula);
+            } else {
+                let baseFormulaY = calculate(currentX_Formula);
+                let startFormulaY = calculate(startX_Formula);
+                relY_standard = -(baseFormulaY - startFormulaY);
+            }
         } catch (e) { 
             errorDisplay.innerText = `[計算エラー]: ${e.message}`; 
-            isAnimating = false; 
-            updateTurnButtonState();
-            return; 
+            isAnimating = false; updateTurnButtonState(); return; 
         }
-        
-        const relX = (baseFormulaX - startX_Formula) * 20;
-        const relY = -(baseFormulaY - startY_Formula) * 20;
-        
-        const rotatedRelX = relX * cosA - relY * sinA * dir;
-        const rotatedRelY = relX * sinA * dir + relY * cosA;
+
+        const rotatedRelX = (relX_standard * 20) * cosA - (relY_standard * 20) * sinA * dir;
+        const rotatedRelY = (relX_standard * 20) * sinA * dir + (relY_standard * 20) * cosA;
 
         const canvasX = p.x + rotatedRelX;
         const canvasY = p.y + rotatedRelY;
@@ -379,7 +419,7 @@ function executeFireShot(targetFormula) {
                 updateTurnDisplay(); 
             }); return;
         }
-        t += 0.15; requestAnimationFrame(animate);
+        t += step; requestAnimationFrame(animate);
     }
     drawStage(p.x, p.y, 1.0); animate();
 }
@@ -525,16 +565,6 @@ function placePlayers() {
     }
 }
 
-function parseFormula(inputText) {
-    let str = inputText.toLowerCase().replace(/\s+/g, '');
-    if (str.startsWith('y=')) str = str.substring(2);
-    str = str.replace(/sin/g, 'Math.sin').replace(/cos/g, 'Math.cos').replace(/tan/g, 'Math.tan');
-    str = str.replace(/abs/g, 'Math.abs').replace(/exp/g, 'Math.exp').replace(/sqrt/g, 'Math.sqrt').replace(/pi/g, 'Math.PI');
-    str = str.replace(/\(([^()]+)\)\^([0-9.]+)/g, 'Math.pow(($1),$2)').replace(/([x0-9.]+)\^([0-9.]+)/g, 'Math.pow($1,$2)');
-    str = str.replace(/(?<!Math\.)pow/g, 'Math.pow').replace(/([0-9])([a-z(])/g, '$1*$2').replace(/\)([0-9a-z])/g, ')*$1').replace(/x\(/g, 'x*(');
-    return str;
-}
-
 function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1) {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -648,5 +678,3 @@ window.addEventListener('load', () => {
     updateScale();
     drawStage();
 });
-
-
