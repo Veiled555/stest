@@ -136,6 +136,13 @@ socket.on('opponentWantsRematch', () => {
     }
 });
 
+socket.on('receiveAngleSync', (data) => {
+    if (players[data.playerIndex]) {
+        players[data.playerIndex].angle = data.angle;
+        drawStage();
+    }
+});
+
 document.getElementById('joinButton').addEventListener('click', () => {
     const roomCode = document.getElementById('roomInput').value.trim();
     if (!roomCode) return;
@@ -231,7 +238,7 @@ function executeFireShot(targetFormula) {
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
 
-    const rad = (-(p.angle || 0) * Math.PI) / 180;
+    const rad = (p.angle || 0) * Math.PI / 180;
     const cosA = Math.cos(rad);
     const sinA = Math.sin(rad);
 
@@ -305,8 +312,8 @@ function executeFireShot(targetFormula) {
         const relX = (baseFormulaX - startX_Formula) * 20;
         const relY = -(baseFormulaY - startY_Formula) * 20;
         
-        const rotatedRelX = relX * cosA - relY * sinA;
-        const rotatedRelY = relX * sinA + relY * cosA;
+        const rotatedRelX = relX * cosA - relY * sinA * dir;
+        const rotatedRelY = relX * sinA * dir + relY * cosA;
 
         const canvasX = p.x + rotatedRelX;
         const canvasY = p.y + rotatedRelY;
@@ -394,15 +401,19 @@ function updateTurnButtonState() {
         fireBtn.disabled = false; 
         fireBtn.style.opacity = "1.0"; 
         fireBtn.style.cursor = "pointer";
+    } else {
+        fireBtn.disabled = true;
+        fireBtn.style.opacity = "0.5";
+        fireBtn.style.cursor = "not-allowed";
+    }
+
+    if (!isAnimating) {
         if (angleInput) {
             angleInput.disabled = false;
             angleInput.style.opacity = "1.0";
             angleInput.style.cursor = "text";
         }
     } else {
-        fireBtn.disabled = true;
-        fireBtn.style.opacity = "0.5";
-        fireBtn.style.cursor = "not-allowed";
         if (angleInput) {
             angleInput.disabled = true;
             angleInput.style.opacity = "0.5";
@@ -566,14 +577,14 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
             
             if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
                 ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
-
-                const rad = ((p.angle || 0) * Math.PI) / 180;
-                const dirX = (p.id === 1) ? 1 : -1;
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.lineWidth = 2.5; ctx.beginPath();
-                ctx.moveTo(p.x, p.y);
-                ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30);
-                ctx.stroke();
             }
+
+            const rad = ((p.angle || 0) * Math.PI) / 180;
+            const dirX = (p.id === 1) ? 1 : -1;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)'; ctx.lineWidth = 2.5; ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30);
+            ctx.stroke();
         }
     });
 
@@ -613,10 +624,19 @@ formulaInput.addEventListener('keydown', (e) => {
 
 document.body.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'angleInput') {
-        const activePlayer = players[currentPlayerIndex];
-        if (activePlayer && activePlayer.id === myPlayerId) {
-            activePlayer.angle = parseFloat(e.target.value) || 0;
+        const targetIdx = myPlayerId - 1;
+        const myCharacter = players[targetIdx];
+        if (myCharacter && !isAnimating) {
+            const val = parseFloat(e.target.value) || 0;
+            myCharacter.angle = val;
             drawStage();
+            if (currentRoomCode) {
+                socket.emit('syncAngle', {
+                    roomCode: currentRoomCode,
+                    playerIndex: targetIdx,
+                    angle: val
+                });
+            }
         }
     }
 });
