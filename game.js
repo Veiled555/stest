@@ -28,9 +28,6 @@ let unitsPerTeam = 3;
 
 let selectedPlayerIndex = null; 
 
-let disconnectTimer = null;
-const DISCONNECT_TIMEOUT = 60000; 
-
 function logToScreen(text, color = "#00ff00") {
     const consoleEl = document.getElementById('debugLog');
     if (consoleEl) {
@@ -281,7 +278,11 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         let baseFormulaY;
         try { 
             baseFormulaY = calculate(baseFormulaX) + offsetByFormula; 
-        } catch (e) { isAnimating = false; triggerNextTurn(); return; }
+        } catch (e) { 
+            isAnimating = false; 
+            if (myPlayerId === (currentPlayerIndex + 1)) triggerNextTurn(); 
+            return; 
+        }
         
         const relX = (baseFormulaX - startX_Formula) * 20;
         const relY = -(baseFormulaY - startY_Formula) * 20; 
@@ -292,8 +293,12 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         const canvasX = p.x + rotatedRelX;
         const canvasY = p.y + rotatedRelY;
         
+        // 限界判定（グリッド表示外までカバー）
         if (isNaN(canvasX) || !isFinite(canvasX) || canvasX > VIRTUAL_WIDTH + 400 || canvasX < -400 || canvasY > VIRTUAL_HEIGHT + 400 || canvasY < -400) {
-            playImpactCinematic(p.x, p.y, () => { checkGameEnd(); }); return;
+            playImpactCinematic(p.x, p.y, () => { 
+                if (myPlayerId === (currentPlayerIndex + 1)) checkGameEnd(); 
+            }); 
+            return;
         }
         
         shotPath.push({ x: canvasX, y: canvasY });
@@ -318,7 +323,10 @@ function executeFireShot(targetFormula, shooterIndex, shotAngle) {
         
         if (isInTerrain(canvasX, canvasY)) {
             explode(canvasX, canvasY, 25);
-            playImpactCinematic(canvasX, canvasY, () => { checkGameEnd(); }); return;
+            playImpactCinematic(canvasX, canvasY, () => { 
+                if (myPlayerId === (currentPlayerIndex + 1)) checkGameEnd(); 
+            }); 
+            return;
         }
         
         t += 0.2; requestAnimationFrame(animate);
@@ -496,26 +504,40 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
+    // グリッド背景の描画（中心原点から左右上下に正確に展開）
     ctx.strokeStyle = '#2d3238'; ctx.lineWidth = 1;
-    for (let x = 0; x <= VIRTUAL_WIDTH; x += 40) {
+    
+    // 縦線の描画 (X軸中心から左右へ)
+    for (let x = vOriginX; x <= VIRTUAL_WIDTH; x += 40) {
         ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, VIRTUAL_HEIGHT); ctx.stroke();
     }
-    for (let y = 0; y <= VIRTUAL_HEIGHT; y += 40) {
+    for (let x = vOriginX - 40; x >= 0; x -= 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, VIRTUAL_HEIGHT); ctx.stroke();
+    }
+    // 横線の描画 (Y軸中心から上下へ)
+    for (let y = vOriginY; y <= VIRTUAL_HEIGHT; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
+    }
+    for (let y = vOriginY - 40; y >= 0; y -= 40) {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(VIRTUAL_WIDTH, y); ctx.stroke();
     }
 
+    // 中心軸 (X軸・Y軸)
     ctx.strokeStyle = '#5c6370'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(0, vOriginY); ctx.lineTo(VIRTUAL_WIDTH, vOriginY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(vOriginX, 0); ctx.lineTo(vOriginX, VIRTUAL_HEIGHT); ctx.stroke();
 
+    // 地形
     ctx.fillStyle = '#4a7c59'; ctx.beginPath();
     terrainCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill();
     
+    // 破壊跡
     ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = 'rgba(0,0,0,1)'; ctx.beginPath();
     destroyedCircles.forEach(c => { ctx.moveTo(c.x + c.r, c.y); ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2); });
     ctx.fill(); ctx.restore();
 
+    // プレイヤー
     players.forEach((p, index) => {
         if (p.isAlive) {
             ctx.fillStyle = (p.team === 1) ? '#00ffff' : '#ffdd00';
@@ -536,6 +558,7 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
         }
     });
 
+    // エフェクト
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
         if (p.alpha <= 0) { explosionParticles.splice(i, 1); continue; }
