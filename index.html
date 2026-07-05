@@ -59,11 +59,18 @@
 
                 <button id="fireButton">発射！</button>
             </div>
-
             <div id="buttons">
                 <button class="key formula-preset" data-formula="3 * abs(x - 10)">絶対値関数</button>
                 <button class="key formula-preset" data-formula="6 * sin(3 * (x - 10)) / (3 * (x - 10))">シンク関数</button>
                 <button class="key formula-preset" data-formula="5 * sin(x / 3) / (1 + exp(2 * (x - 15)))">フィルター関数</button>
+                <button class="key formula-preset" data-formula="3 / (1 + (exp(-69 * (x + 2))))">シグモイド(型)</button>
+                <button class="key formula-preset" data-formula="y = ln(abs(x))">対数(ln)</button>
+                <button class="key formula-preset" data-formula="y = log(abs(x))">常用対数(log)</button>
+                <button class="key formula-preset" data-formula="y = sqrt(abs(x))">平方根(sqrt)</button>
+                <button class="key formula-preset" data-formula="y = tan(x / 10)">正接(tan)</button>
+                <button class="key formula-preset" data-formula="y = ((x - 3)^2) / 20">二次関数(放物線)</button>
+                <button class="key formula-preset" data-formula="y' = 1.2^x">指数微分(y')</button>
+                <button class="key formula-preset" data-formula="y'' = (1.2^(-(x+3)^2))*(20*(-y))">微分方程式(y'')</button>
             </div>
         </div>
 
