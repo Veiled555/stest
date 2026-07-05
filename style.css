@@ -102,10 +102,31 @@ html, body {
 #buttons {
     display: flex;
     gap: 6px;
-    flex-wrap: wrap;
+    overflow-x: auto;          /* 横方向にはみ出た場合にスクロール可能にする */
+    white-space: nowrap;       /* ボタンを一行の中に維持して改行させない */
+    padding-bottom: 5px;       /* 横スクロールバーとボタンの間の微小な余白 */
+    width: 100%;
+    -webkit-overflow-scrolling: touch; /* スマホ・タブレットでのスクロールを滑らかにする */
+}
+
+/* 💡 スクロールバーのデザインを細くスッキリさせる設定 */
+#buttons::-webkit-scrollbar {
+    height: 5px;
+}
+#buttons::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+}
+#buttons::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+}
+#buttons::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.4);
 }
 
 .key, #fireButton {
+    flex-shrink: 0;            /* ❗ 横スクロール時にボタン幅が潰れるのを絶対に防ぐ */
     padding: 8px 14px;
     background: #222;
     border: 1px solid #555;
