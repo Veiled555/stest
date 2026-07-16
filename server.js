@@ -60,7 +60,8 @@ socket.on('syncAngle', (data) => {
     });
 
     socket.on('sendFormula', (data) => {
-        socket.to(data.roomCode).emit('receiveFormula', data.formula);
+        // data には { roomCode, formula, senderName } が入っています
+        socket.to(data.roomCode).emit('receiveFormula', data);
     });
 
     // 💡 改善③：再戦リクエストの処理
