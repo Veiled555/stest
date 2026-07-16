@@ -103,7 +103,7 @@ socket.on('roomError', (msg) => {
 
 socket.on('startSyncProcess', () => {
     if (disconnectTimer) {
-        logToScreen(`✨ 対戦相手が再接続しました。タイマーを解除します。`, "#00ff00");
+        logToScreen(`✨ 对戦相手が再接続しました。タイマーを解除します。`, "#00ff00");
         clearTimeout(disconnectTimer);
         disconnectTimer = null;
     }
@@ -124,8 +124,24 @@ socket.on('receiveTerrain', (data) => {
     terrainCircles = data.terrain;
     players = data.players;
     
+    // 【改善点・名前同期】ゲスト（Player 2）側のローカル名前をプレイヤーリストに再注入し、ホストへも名前を即座に知らせる
     if (myPlayerId === 2 && players[1]) {
         players[1].name = getMyName();
+        socket.emit('syncAngle', {
+            roomCode: currentRoomCode,
+            playerIndex: 1,
+            angle: players[1].angle,
+            senderName: players[1].name
+        });
+    }
+    // ホスト（Player 1）側も自分の名前を相手に再通知する
+    if (myPlayerId === 1 && players[0]) {
+        socket.emit('syncAngle', {
+            roomCode: currentRoomCode,
+            playerIndex: 0,
+            angle: players[0].angle,
+            senderName: players[0].name
+        });
     }
     
     destroyedCircles = [];
@@ -143,6 +159,7 @@ socket.on('receiveTerrain', (data) => {
 });
 
 socket.on('receiveFormula', (data) => {
+    // 相手から送られてきた数式と名前を解析
     const formula = typeof data === 'object' ? data.formula : data;
     const senderName = (data && data.senderName) ? data.senderName : `Player${currentPlayerIndex + 1}`;
     
@@ -151,7 +168,7 @@ socket.on('receiveFormula', (data) => {
     }
     
     logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
-    executeFireShot(formula);
+    executeFireShot(formula, true); // 外部（受信側）として実行
 });
 
 socket.on('opponentDisconnected', () => {
@@ -181,9 +198,13 @@ socket.on('opponentWantsRematch', () => {
     }
 });
 
+// 角度や名前の同期データを受信したとき
 socket.on('receiveAngleSync', (data) => {
     if (players[data.playerIndex]) {
         players[data.playerIndex].angle = data.angle;
+        if (data.senderName) {
+            players[data.playerIndex].name = data.senderName;
+        }
         drawStage();
     }
 });
@@ -238,16 +259,43 @@ function fireShot() {
     if (!isGameReady || isAnimating || disconnectTimer) return;
     if (myPlayerId !== (currentPlayerIndex + 1)) return;
 
-    const currentFormula = formulaInput.value;
+    const currentFormula = formulaInput.value.trim();
+    
+    // 【改善点】式が空欄、またはスペースのみの場合は発射処理を完全ブロック
+    if (currentFormula === "") {
+        errorDisplay.innerText = "数式を入力してください。";
+        return;
+    }
+    
+    // 【改善点・エラー同期防止】送信前にローカル（自分側）で式が正しいか構文チェックを行う
+    const isFirstDeriv = currentFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
+    const isSecondDeriv = currentFormula.toLowerCase().replace(/\s+/g, '').startsWith("y''=");
+    const formulaString = parseFormula(currentFormula); 
+    
+    try { 
+        if (isSecondDeriv) {
+            new Function('x', 'y', 'dy', `return ${formulaString};`);
+        } else if (isFirstDeriv) {
+            new Function('x', 'y', `return ${formulaString};`);
+        } else {
+            new Function('x', `return ${formulaString};`); 
+        }
+    } catch(e) { 
+        // 構文エラーがあればここでストップし、相手へのパケット送信は行わない
+        errorDisplay.innerText = `[構文エラー]: ${e.message}`; 
+        return; 
+    }
+
     const myName = getMyName();
     
+    // 構文に問題が無ければ、相手に送信して発射を実行する
     socket.emit('sendFormula', { 
         roomCode: currentRoomCode, 
         formula: currentFormula,
         senderName: myName 
     });
     
-    executeFireShot(currentFormula);
+    executeFireShot(currentFormula, false);
 }
 
 function updateScale() {
@@ -271,7 +319,8 @@ function parseFormula(inputText) {
     return str;
 }
 
-function executeFireShot(targetFormula) {
+// isRemote: 相手側の実行かどうかを表すフラグ
+function executeFireShot(targetFormula, isRemote = false) {
     errorDisplay.innerText = ""; 
     const isFirstDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
     const isSecondDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y''=");
@@ -291,7 +340,8 @@ function executeFireShot(targetFormula) {
             calculate = new Function('x', `return ${formulaString};`); 
         }
     } catch(e) { 
-        errorDisplay.innerText = `[構文エラー]: ${e.message}`; 
+        // リモート(相手)から送られた不整合な式の場合、もしくは例外が発生した場合はエラー表示のみにしてフリーズを防止
+        errorDisplay.innerText = `[エラー]: ${e.message}`; 
         isAnimating = false;
         updateTurnButtonState();
         return; 
@@ -300,25 +350,18 @@ function executeFireShot(targetFormula) {
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
 
-    // 射撃プレイヤーの向き（Player 1 = 右方向(1), Player 2 = 左方向(-1)）
     const dir = (currentPlayerIndex === 0) ? 1 : -1;
-    
-    // 射角（ラジアン）
     const baseAngleRad = (p.angle || 0) * Math.PI / 180;
     
-    // 初速ベクトル（方向と角度を考慮）
-    // 0度のときは水平方向（Player1は右、Player2は左）
     const vx = Math.cos(baseAngleRad) * dir;
-    const vy = -Math.sin(baseAngleRad) * dir; // Canvasは上がマイナス方向なので符号を反転
+    const vy = -Math.sin(baseAngleRad) * dir; 
 
     let t = 0; 
     const step = 0.075;
     
-    // 弾の現在位置（仮想画面座標系 px）
     let currentBulletX = p.x;
     let currentBulletY = p.y;
 
-    // 1フレーム前の「数式としてのy座標値」を保持するための変数（微分方程式用）
     let lastFormulaY = (vOriginY - p.y) / 40; 
     let currentDY_Formula = 0; 
 
@@ -356,15 +399,10 @@ function executeFireShot(targetFormula) {
         zoomAnimation();
     }
 
-        function animate() {
-        // 1. 【ベースラインの決定】
-        // 弾は常に、向けた角度（vx, vy）の方向へ、一定のペース（t * 40 px）で前進します。
-        // これにより、撃ち出した瞬間は100%「視線の方向」へ真っ直ぐ飛び出します。
+    function animate() {
         const baseX = p.x + vx * t * 40;
         const baseY = p.y + vy * t * 40;
 
-        // 2. 【絶対座標 x の算出】
-        // そのベース座標が、ワールド（グリッド）のどこの絶対 x 座標にいるかを計算します。
         const worldX_Formula = (baseX - vOriginX) / 40;
 
         let finalCanvasX = baseX;
@@ -372,45 +410,35 @@ function executeFireShot(targetFormula) {
 
         try {
             if (isSecondDeriv) {
-                // 2階微分方程式
                 let ddy = calculate(worldX_Formula, lastFormulaY, currentDY_Formula);
                 currentDY_Formula += ddy * step * dir;
                 lastFormulaY += currentDY_Formula * step * dir;
                 finalCanvasY = vOriginY - (lastFormulaY * 40);
             } else if (isFirstDeriv) {
-                // 1階微分方程式
                 let dy = calculate(worldX_Formula, lastFormulaY);
                 lastFormulaY += dy * step * dir;
                 finalCanvasY = vOriginY - (lastFormulaY * 40);
             } else {
-                // 通常の関数（陽関数）: y = f(x)
-                // 絶対座標 worldX_Formula における、数式上の絶対高度を直接計算します。
                 const worldY_Formula = calculate(worldX_Formula);
                 
                 if (isNaN(worldY_Formula) || !isFinite(worldY_Formula)) {
                     throw new Error("数値が定義されていません");
                 }
                 
-                // 発射地点（プレイヤーの初期位置）の絶対 x 座標での数式高さを基準（ゼロ点）にします。
                 const startX_Formula = (p.x - vOriginX) / 40;
                 const startY_Formula = calculate(startX_Formula);
                 
-                // 現在の絶対 x 座標における、基準点からの高低差（変位）を計算します。
                 const yDisplacement = (worldY_Formula - startY_Formula) * 40;
-                
-                // 💡【ここが重要！】
-                // 弾の進行方向のベースライン（baseY）に対して、
-                // ワールドの絶対座標から算出された高低差を「上下（垂直方向）」にそのまま足し合わせます。
-                // これにより、角度を変えて打っても射出の瞬間は視線方向へ綺麗に飛び出し、
-                // 指定のグリッド座標を通過する瞬間に、式通りのカクンとしたカーブが上・下方向へと描かれます。
                 finalCanvasY = baseY - yDisplacement;
             }
         } catch (e) { 
-            errorDisplay.innerText = `[計算エラー]: ${e.message}`; 
-            isAnimating = false; updateTurnButtonState(); return; 
+            // 実行中の計算エラーが起きた場合もアニメーションを中断しターンを終了（相手には同期させない）
+            errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
+            isAnimating = false; 
+            updateTurnButtonState(); 
+            return; 
         }
 
-        // 計算された最終的な弾の絶対座標
         currentBulletX = finalCanvasX;
         currentBulletY = finalCanvasY;
         
@@ -482,8 +510,6 @@ function executeFireShot(targetFormula) {
     drawStage(p.x, p.y, 1.0); animate();
 }
 
-
-
 function updateTurnDisplay() {
     if (myPlayerId === null || !isGameReady) return;
     if (disconnectTimer) return; 
@@ -496,13 +522,11 @@ function updateTurnDisplay() {
     else { turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; }
 }
 
-// 【改善点⑦】ロック処理の廃止（Fire!ボタンのみ無効化する）
 function updateTurnButtonState() {
     if (!isGameReady || disconnectTimer) { disableControlsTemporarily(); return; }
     const angleInput = document.getElementById('angleInput');
     const formulaInput = document.getElementById('formulaInput');
 
-    // Fireボタンの制御のみ現在のターン状態に合わせる
     if (!isAnimating && players[0].isAlive && players[1].isAlive && myPlayerId === (currentPlayerIndex + 1)) {
         fireBtn.disabled = false; 
         fireBtn.style.opacity = "1.0"; 
@@ -513,7 +537,6 @@ function updateTurnButtonState() {
         fireBtn.style.cursor = "not-allowed";
     }
 
-    // 角度入力、式入力、プリセットボタンは常にアクティブ（ロック廃止）
     if (angleInput) {
         angleInput.disabled = false;
         angleInput.style.opacity = "1.0";
@@ -573,29 +596,26 @@ function resizeCanvas() {
     drawStage();
 }
 
-// 【改善点③】地形を満遍なく広げ、中央に極端な過密を避けるロジック
 function generateTerrain() {
     terrainCircles = []; destroyedCircles = [];
     const targetCircles = 7; let attempts = 0;
     while (terrainCircles.length < targetCircles && attempts < 1500) {
         attempts++;
         
-        // 全域に分散させるための座標決定（中央付近 x:[40%, 60%] に無理に固めない）
         const isLeftOrRight = Math.random() < 0.5;
         let rx = 0;
         if (isLeftOrRight) {
-            rx = VIRTUAL_WIDTH * 0.12 + Math.random() * VIRTUAL_WIDTH * 0.30; // 左側寄り
+            rx = VIRTUAL_WIDTH * 0.12 + Math.random() * VIRTUAL_WIDTH * 0.30; 
         } else {
-            rx = VIRTUAL_WIDTH * 0.58 + Math.random() * VIRTUAL_WIDTH * 0.30; // 右側寄り
+            rx = VIRTUAL_WIDTH * 0.58 + Math.random() * VIRTUAL_WIDTH * 0.30; 
         }
         
         const newCircle = {
             x: rx,
             y: VIRTUAL_HEIGHT * 0.25 + Math.random() * VIRTUAL_HEIGHT * 0.55, 
-            r: 40 + Math.random() * 50 // オブジェクト自体も少しスマートに
+            r: 40 + Math.random() * 50 
         };
         
-        // 中央極小エリア(x:45%~55% かつ y:30%~70%)には意図的に大きな遮蔽を作らない
         if (newCircle.x > VIRTUAL_WIDTH * 0.42 && newCircle.x < VIRTUAL_WIDTH * 0.58) {
             continue;
         }
@@ -615,10 +635,10 @@ function isInTerrain(px, py) {
     return inAnyTerrain && !inAnyDestroyed;
 }
 
-// 【改善点③】地形から安全距離（3マス ≒ 120px）離して空中または隙間にバラバラに配置する
+// 【改善点】安全に生成するためのロジックの更なる厳格化（埋まり防止）
 function placePlayers() {
     players = [];
-    const minSafetyDistance = 120; // 3マス (120px) 以上の距離制限
+    const minSafetyDistance = 135; // 安全判定を「半径3マス+α (135px)」に少しだけ強化
 
     for (let i = 0; i < 2; i++) {
         let placed = false;
@@ -626,9 +646,8 @@ function placePlayers() {
         let py = 0;
         let attempts = 0;
 
-        while (!placed && attempts < 1000) {
+        while (!placed && attempts < 2000) {
             attempts++;
-            // 左(i=0)と右(i=1)でx範囲を分離し、y高さはバラバラに設定
             if (i === 0) {
                 px = VIRTUAL_WIDTH * 0.08 + Math.random() * (VIRTUAL_WIDTH * 0.16); 
             } else {
@@ -636,27 +655,26 @@ function placePlayers() {
             }
             py = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.65);
 
-            // 地形(オブジェクト)から安全な距離を保っているかチェック
-            let tooCloseToTerrain = false;
+            // 1. 地形の「内部」に座標自体が入っていないか、かつ安全な余白距離があるかをダブルチェック
+            let isInsideOrTooClose = false;
             for (let c of terrainCircles) {
                 const dist = Math.sqrt((px - c.x)**2 + (py - c.y)**2);
                 if (dist < (c.r + minSafetyDistance)) {
-                    tooCloseToTerrain = true;
+                    isInsideOrTooClose = true;
                     break;
                 }
             }
 
-            // 画面外や下端の制限
-            if (!tooCloseToTerrain && py < VIRTUAL_HEIGHT - 40) {
+            if (!isInsideOrTooClose && py < VIRTUAL_HEIGHT - 60) {
                 players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true, angle: 0, name: `PLAYER ${i+1}` });
                 placed = true;
             }
         }
 
-        // 万が一、安全な空き地が見つからなかった場合のフォールバック（従来ロジック）
+        // 完全に安全なエリアが見つからなかったときの代替処置（画面端の安全な空中）
         if (!placed) {
-            px = (i === 0) ? VIRTUAL_WIDTH * 0.15 : VIRTUAL_WIDTH * 0.85;
-            py = VIRTUAL_HEIGHT * 0.3;
+            px = (i === 0) ? VIRTUAL_WIDTH * 0.08 : VIRTUAL_WIDTH * 0.92;
+            py = VIRTUAL_HEIGHT * 0.2;
             players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true, angle: 0, name: `PLAYER ${i+1}` });
         }
     }
@@ -739,12 +757,10 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
             ctx.textAlign = 'center';
             ctx.fillText(p.name || `PLAYER ${p.id}`, p.x, p.y - 14);
 
-            // 【改善点②】プレイヤーから伸びるガイド線を射撃の回転計算と完全一致
             const rad = ((p.angle || 0) * Math.PI) / 180;
             const dirX = (p.id === 1) ? 1 : -1;
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 2.5; ctx.beginPath();
             ctx.moveTo(p.x, p.y);
-            // 回転行列を元にしたベクトルをそのまま描画
             ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30 * dirX);
             ctx.stroke();
         }
@@ -757,8 +773,6 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     }
     ctx.restore(); 
 }
-
-
 
 function explode(ex, ey, er) {
     destroyedCircles.push({x: ex, y: ey, r: er});
@@ -773,7 +787,7 @@ function detectDevice() {
 
 document.querySelectorAll('.formula-preset').forEach(btn => {
     btn.addEventListener('click', (e) => {
-        if (!isGameReady) return; // アニメーション中も入力を受け付け
+        if (!isGameReady) return; 
         formulaInput.value = e.target.getAttribute('data-formula');
     });
 });
@@ -790,7 +804,7 @@ document.body.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'angleInput') {
         const targetIdx = myPlayerId - 1;
         const myCharacter = players[targetIdx];
-        if (myCharacter) { // アニメーション中でも角度調整を可能にする
+        if (myCharacter) { 
             const val = parseFloat(e.target.value) || 0;
             myCharacter.angle = val;
             drawStage();
@@ -798,7 +812,8 @@ document.body.addEventListener('input', (e) => {
                 socket.emit('syncAngle', {
                     roomCode: currentRoomCode,
                     playerIndex: targetIdx,
-                    angle: val
+                    angle: val,
+                    senderName: getMyName() // 【改善点・名前同期】角度調整のタイミングでも名前を同期
                 });
             }
         }
