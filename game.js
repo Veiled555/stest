@@ -320,6 +320,7 @@ function parseFormula(inputText) {
 }
 
 // isRemote: 相手側の実行かどうかを表すフラグ
+// isRemote: 相手側の実行かどうかを表すフラグ
 function executeFireShot(targetFormula, isRemote = false) {
     errorDisplay.innerText = ""; 
     const isFirstDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
@@ -327,7 +328,10 @@ function executeFireShot(targetFormula, isRemote = false) {
     const formulaString = parseFormula(targetFormula); 
     const p = players[currentPlayerIndex];
     
-    const activePlayerName = p.name || `Player${p.id}`;
+    // 【💡改善点】名前が PLAYER 1 / 2 に戻るのを防ぐため、設定されているカスタム名を確実に最優先する
+    const activePlayerName = p.name && !p.name.startsWith("PLAYER") ? p.name : (p.id === 1 ? (players[0].name || "Player 1") : (players[1].name || "Player 2"));
+    
+    // ログに記録する名前を強制的に固定
     addFormulaLog(activePlayerName, targetFormula);
 
     let calculate;
@@ -340,7 +344,6 @@ function executeFireShot(targetFormula, isRemote = false) {
             calculate = new Function('x', `return ${formulaString};`); 
         }
     } catch(e) { 
-        // リモート(相手)から送られた不整合な式の場合、もしくは例外が発生した場合はエラー表示のみにしてフリーズを防止
         errorDisplay.innerText = `[エラー]: ${e.message}`; 
         isAnimating = false;
         updateTurnButtonState();
@@ -432,7 +435,6 @@ function executeFireShot(targetFormula, isRemote = false) {
                 finalCanvasY = baseY - yDisplacement;
             }
         } catch (e) { 
-            // 実行中の計算エラーが起きた場合もアニメーションを中断しターンを終了（相手には同期させない）
             errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
             isAnimating = false; 
             updateTurnButtonState(); 
@@ -483,7 +485,10 @@ function executeFireShot(targetFormula, isRemote = false) {
         
         if (target.isAlive && Math.sqrt((currentBulletX - target.x)**2 + (currentBulletY - target.y)**2) < target.r + 2) {
             target.isAlive = false; explode(currentBulletX, currentBulletY, 20);
-            const winnerName = p.name || `PLAYER ${p.id}`;
+            
+            // 【💡改善点】勝利宣言ログでもカスタムされた名前を確実に固定
+            const winnerName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
+            
             playImpactCinematic(currentBulletX, currentBulletY, () => { 
                 turnDisplay.innerText = `${winnerName} WINS!!`; 
                 showResultMenu("GAME OVER", `${winnerName} の勝利です！`);
@@ -491,7 +496,10 @@ function executeFireShot(targetFormula, isRemote = false) {
         }
         if (t > 0.8 && Math.sqrt((currentBulletX - p.x)**2 + (currentBulletY - p.y)**2) < p.r + 2) {
             p.isAlive = false; explode(currentBulletX, currentBulletY, 20);
-            const loserName = p.name || `PLAYER ${p.id}`;
+            
+            // 自爆した側の名前
+            const loserName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
+            
             playImpactCinematic(currentBulletX, currentBulletY, () => { 
                 turnDisplay.innerText = `${loserName} SUICIDE!`; 
                 showResultMenu("GAME OVER", `${loserName} が自爆しました。`);
