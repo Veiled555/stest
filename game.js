@@ -582,6 +582,9 @@ function initGame() {
     const angleInput = document.getElementById('angleInput');
     if (angleInput) angleInput.value = "0";
     
+    // 💡【追加】再戦やゲーム初期化の際に、入力されていた式を空にする
+    if (formulaInput) formulaInput.value = "";
+    
     drawStage();
 }
 
