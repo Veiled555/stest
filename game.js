@@ -159,16 +159,17 @@ socket.on('receiveTerrain', (data) => {
 });
 
 socket.on('receiveFormula', (data) => {
-    // 相手から送られてきた数式と名前を解析
-    const formula = typeof data === 'object' ? data.formula : data;
-    const senderName = (data && data.senderName) ? data.senderName : `Player${currentPlayerIndex + 1}`;
+    // 相手から送られてきたオブジェクトから式と名前を解析
+    const formula = (data && data.formula) ? data.formula : data;
+    const senderName = (data && data.senderName) ? data.senderName : null;
     
-    if (players[currentPlayerIndex]) {
+    if (players[currentPlayerIndex] && senderName) {
+        // 相手の名前をプレイヤーオブジェクトに確実にセット
         players[currentPlayerIndex].name = senderName;
     }
     
     logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
-    executeFireShot(formula, true); // 外部（受信側）として実行
+    executeFireShot(formula, true); 
 });
 
 socket.on('opponentDisconnected', () => {
