@@ -124,7 +124,6 @@ socket.on('receiveTerrain', (data) => {
     terrainCircles = data.terrain;
     players = data.players;
     
-    // 【改善点・名前同期】ゲスト（Player 2）側のローカル名前をプレイヤーリストに再注入し、ホストへも名前を即座に知らせる
     if (myPlayerId === 2 && players[1]) {
         players[1].name = getMyName();
         socket.emit('syncAngle', {
@@ -134,7 +133,6 @@ socket.on('receiveTerrain', (data) => {
             senderName: players[1].name
         });
     }
-    // ホスト（Player 1）側も自分の名前を相手に再通知する
     if (myPlayerId === 1 && players[0]) {
         socket.emit('syncAngle', {
             roomCode: currentRoomCode,
@@ -149,6 +147,9 @@ socket.on('receiveTerrain', (data) => {
     isGameReady = true; 
     isAnimating = false; 
     
+    // 💡【追加】盤面を同期して新しく始める（再戦含む）タイミングで、入力されていた式を空にする
+    if (formulaInput) formulaInput.value = "";
+    
     document.getElementById('lobbyModal').style.display = 'none';
     document.getElementById('resultModal').style.display = 'none'; 
     
@@ -157,6 +158,7 @@ socket.on('receiveTerrain', (data) => {
     updateTurnButtonState();
     drawStage();
 });
+
 
 socket.on('receiveFormula', (data) => {
     // 相手から送られてきたオブジェクトから式と名前を解析
