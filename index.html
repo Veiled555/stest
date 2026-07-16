@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HTML5 Graphwar - Adaptive Edition</title>
+    <title>HTML5 Graphwar</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
@@ -12,19 +12,13 @@
     <div id="lobbyModal" class="modal-layer">
         <div class="lobby-box">
             <h2>Graphwar Online</h2>
+            <div style="margin-bottom: 10px; text-align: left;">
+                <label style="color: #ccc; font-size: 14px;">プレイヤー名:</label>
+                <input type="text" id="playerNameInput" placeholder="プレイヤー名" style="margin-top: 5px; margin-bottom: 10px;">
+            </div>
             <p>友達と同じ「合言葉」を入力してください</p>
             <input type="text" id="roomInput" value=""><br>
-            <!--
-            <div style="margin: 15px 0; color: #fff; text-align: left; display: inline-block;">
-                <label style="margin-right: 15px;">
-                    <input type="radio" name="unitMode" value="1"> 1体モード
-                </label>
-                <label>
-                    <input type="radio" name="unitMode" value="3" checked>  複数モード (3体)
-                </label>
-            </div><br>
-            -->
-
+            
             <button id="joinButton">対戦部屋に入る</button>
         </div>
     </div>
@@ -45,20 +39,24 @@
                 <div id="errorDisplay"></div>
             </div>
             
-            <div class="bar-row inputs">
-                <div class="input-group formula-group">
-                    <label>y =</label>
-                    <input type="text" id="formulaInput" value="">
-                </div>
 
-                <div class="input-group angle-group" style="margin-left: 10px;">
-                    <label>角度:</label>
-                    <input type="number" id="angleInput" value="0" style="width: 50px; background: #222; color: #fff; border: 1px solid #555; text-align: center; border-radius: 4px;">
+        <div class="bar-row inputs-column">
+            <div class="formula-box">
+                <span class="prefix">f(x) =</span>
+                <input type="text" id="formulaInput" value="" placeholder="数式を入力してください">
+            </div>
+            
+            <div class="bottom-inputs-row">
+                <div class="angle-box">
+                    <span class="label">角度:</span>
+                    <input type="number" id="angleInput" value="0" min="-360" max="360">
                     <span style="color: #aaa; font-size: 12px; margin-left: 2px;">°</span>
                 </div>
-
-                <button id="fireButton">発射！</button>
+                <button id="fireButton">Fire!</button>
+                <div id="formulaLogContainer"></div>
             </div>
+        </div>
+
             <div id="buttons">
                 <button class="key formula-preset" data-formula="3 * abs(x - 10)">絶対値関数</button>
                 <button class="key formula-preset" data-formula="6 * sin(3 * (x - 10)) / (3 * (x - 10))">シンク関数</button>
