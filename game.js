@@ -324,6 +324,7 @@ function parseFormula(inputText) {
 
 // isRemote: 相手側の実行かどうかを表すフラグ
 // isRemote: 相手側の実行かどうかを表すフラグ
+
 function executeFireShot(targetFormula, isRemote = false) {
     errorDisplay.innerText = ""; 
     const isFirstDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
@@ -331,10 +332,7 @@ function executeFireShot(targetFormula, isRemote = false) {
     const formulaString = parseFormula(targetFormula); 
     const p = players[currentPlayerIndex];
     
-    // 【💡改善点】名前が PLAYER 1 / 2 に戻るのを防ぐため、設定されているカスタム名を確実に最優先する
     const activePlayerName = p.name && !p.name.startsWith("PLAYER") ? p.name : (p.id === 1 ? (players[0].name || "Player 1") : (players[1].name || "Player 2"));
-    
-    // ログに記録する名前を強制的に固定
     addFormulaLog(activePlayerName, targetFormula);
 
     let calculate;
@@ -374,6 +372,37 @@ function executeFireShot(targetFormula, isRemote = false) {
     isAnimating = true; 
     disableControlsTemporarily();
     let shotPath = []; 
+
+    // 💡 弾が進んでいる間にプレイヤーに当たったかどうかを記憶するフラグ
+    let p1Hit = false;
+    let p2Hit = false;
+
+    // 💡 【移動】判定関数をスコープのエラーが出ないよう安全な位置に定義
+    function checkShotResultAndEnd(finalX, finalY) {
+        // 両方当たった、または自分が当たった（自爆）
+        if ((currentPlayerIndex === 0 && p1Hit) || (currentPlayerIndex === 1 && p2Hit)) {
+            const loserName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
+            playImpactCinematic(finalX, finalY, () => { 
+                turnDisplay.innerText = `${loserName} SUICIDE!`; 
+                showResultMenu("GAME OVER", `${loserName} が自爆しました。`);
+            });
+        } 
+        // 相手だけに当たった（クリーンヒット）
+        else if ((currentPlayerIndex === 0 && p2Hit) || (currentPlayerIndex === 1 && p1Hit)) {
+            const winnerName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
+            playImpactCinematic(finalX, finalY, () => { 
+                turnDisplay.innerText = `${winnerName} WINS!!`; 
+                showResultMenu("GAME OVER", `${winnerName} の勝利です！`);
+            });
+        } 
+        // 誰にも当たらなかった（ミス）
+        else {
+            playImpactCinematic(finalX, finalY, () => { 
+                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
+                updateTurnDisplay(); 
+            });
+        }
+    }
 
     function playImpactCinematic(finalX, finalY, onComplete) {
         let duration = 60; let frame = 0; let currentZoom = 1.0;
@@ -447,11 +476,9 @@ function executeFireShot(targetFormula, isRemote = false) {
         currentBulletX = finalCanvasX;
         currentBulletY = finalCanvasY;
         
+        // 数値エラー時のセーフティ
         if (isNaN(currentBulletX) || !isFinite(currentBulletX) || isNaN(currentBulletY) || !isFinite(currentBulletY)) {
-            playImpactCinematic(p.x, p.y, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
-            }); 
+            checkShotResultAndEnd(p.x, p.y);
             return;
         }
         
@@ -475,47 +502,43 @@ function executeFireShot(targetFormula, isRemote = false) {
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#ff3366'; ctx.beginPath(); ctx.arc(currentBulletX, currentBulletY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
+        // 💡【重複削除】ここに元々あった古い画面外判定のブロックを除去しました
+
+        // 1. 相手プレイヤーとの当たり判定
+        const targetPlayerIndex = (currentPlayerIndex + 1) % 2; 
+        const target = players[targetPlayerIndex];
+        if (target.isAlive && Math.sqrt((currentBulletX - target.x)**2 + (currentBulletY - target.y)**2) < target.r + 2) {
+            // 💡 当たった瞬間にそのプレイヤーを死亡状態(非表示)にし、爆発エフェクトを出す
+            target.isAlive = false; 
+            explode(currentBulletX, currentBulletY, 20);
+            
+            if (targetPlayerIndex === 1) p2Hit = true;
+            if (targetPlayerIndex === 0) p1Hit = true;
+        }
+        
+        // 2. 自分自身（自爆）との当たり判定
+        if (t > 0.8 && p.isAlive && Math.sqrt((currentBulletX - p.x)**2 + (currentBulletY - p.y)**2) < p.r + 2) {
+            // 💡 当たった瞬間に自分を死亡状態(非表示)にし、爆発エフェクトを出す
+            p.isAlive = false;
+            explode(currentBulletX, currentBulletY, 20);
+            
+            if (currentPlayerIndex === 0) p1Hit = true;
+            if (currentPlayerIndex === 1) p2Hit = true;
+        }
+
+        // 3. 画面外に消えたときの最終着弾処理
         if (currentBulletX > VIRTUAL_WIDTH + 200 || currentBulletX < -200 || currentBulletY > VIRTUAL_HEIGHT * 2 || currentBulletY < -VIRTUAL_HEIGHT * 2) {
-            playImpactCinematic(currentBulletX, currentBulletY, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
-            }); 
+            checkShotResultAndEnd(currentBulletX, currentBulletY);
             return;
         }
         
-        const targetPlayerIndex = (currentPlayerIndex + 1) % 2; 
-        const target = players[targetPlayerIndex];
-        
-        if (target.isAlive && Math.sqrt((currentBulletX - target.x)**2 + (currentBulletY - target.y)**2) < target.r + 2) {
-            target.isAlive = false; explode(currentBulletX, currentBulletY, 20);
-            
-            // 【💡改善点】勝利宣言ログでもカスタムされた名前を確実に固定
-            const winnerName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
-            
-            playImpactCinematic(currentBulletX, currentBulletY, () => { 
-                turnDisplay.innerText = `${winnerName} WINS!!`; 
-                showResultMenu("GAME OVER", `${winnerName} の勝利です！`);
-            }); return;
-        }
-        if (t > 0.8 && Math.sqrt((currentBulletX - p.x)**2 + (currentBulletY - p.y)**2) < p.r + 2) {
-            p.isAlive = false; explode(currentBulletX, currentBulletY, 20);
-            
-            // 自爆した側の名前
-            const loserName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
-            
-            playImpactCinematic(currentBulletX, currentBulletY, () => { 
-                turnDisplay.innerText = `${loserName} SUICIDE!`; 
-                showResultMenu("GAME OVER", `${loserName} が自爆しました。`);
-            }); return;
-        }
-        
+        // 4. 地形にぶつかったときの最終着弾処理
         if (isInTerrain(currentBulletX, currentBulletY)) {
             explode(currentBulletX, currentBulletY, 20);
-            playImpactCinematic(currentBulletX, currentBulletY, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
-            }); return;
+            checkShotResultAndEnd(currentBulletX, currentBulletY);
+            return;
         }
+
         t += step; requestAnimationFrame(animate);
     }
     drawStage(p.x, p.y, 1.0); animate();
@@ -529,8 +552,14 @@ function updateTurnDisplay() {
     const p2Name = players[1]?.name || "PLAYER 2";
     let identityText = (myPlayerId === 1) ? `【あなた: ${p1Name} (左)】` : `【あなた: ${p2Name} (右)】`;
     
-    if (currentPlayerIndex + 1 === myPlayerId) { turnDisplay.innerText = `${identityText} あなたのターンです！`; } 
-    else { turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; }
+    if (currentPlayerIndex + 1 === myPlayerId) { 
+        turnDisplay.innerText = `${identityText} あなたのターンです！`; 
+    } else { 
+        turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; 
+    }
+
+    // 💡【追加】ターンが切り替わった瞬間に、黒い円の描画をすぐに反映させる
+    drawStage();
 }
 
 function updateTurnButtonState() {
@@ -610,88 +639,129 @@ function resizeCanvas() {
     drawStage();
 }
 
+// 💡 1. 改善された地形生成ロジック
 function generateTerrain() {
-    terrainCircles = []; destroyedCircles = [];
-    const targetCircles = 7; let attempts = 0;
-    while (terrainCircles.length < targetCircles && attempts < 1500) {
+    terrainCircles = []; 
+    destroyedCircles = [];
+    
+    // 円の数を 10 〜 15 個のランダムにする
+    const targetCircles = Math.floor(10 + Math.random() * 6); // 10 〜 15
+    
+    let attempts = 0;
+    let leftCount = 0;  // 左側に生成された数
+    let rightCount = 0; // 右側に生成された数
+
+    while (terrainCircles.length < targetCircles && attempts < 3000) {
         attempts++;
         
-        const isLeftOrRight = Math.random() < 0.5;
-        let rx = 0;
-        if (isLeftOrRight) {
-            rx = VIRTUAL_WIDTH * 0.12 + Math.random() * VIRTUAL_WIDTH * 0.30; 
+        // 左右の極端な偏りを防ぐためのロジック（どちらかが4個未満なら、そちらを優先的に生成）
+        let isLeft;
+        if (leftCount < 4 && terrainCircles.length >= targetCircles - 4) {
+            isLeft = true;
+        } else if (rightCount < 4 && terrainCircles.length >= targetCircles - 4) {
+            isLeft = false;
         } else {
-            rx = VIRTUAL_WIDTH * 0.58 + Math.random() * VIRTUAL_WIDTH * 0.30; 
+            isLeft = Math.random() < 0.5;
+        }
+
+        let rx = 0;
+        if (isLeft) {
+            rx = Math.random() * (VIRTUAL_WIDTH * 0.5); 
+        } else {
+            rx = (VIRTUAL_WIDTH * 0.5) + Math.random() * (VIRTUAL_WIDTH * 0.5); 
         }
         
         const newCircle = {
             x: rx,
-            y: VIRTUAL_HEIGHT * 0.25 + Math.random() * VIRTUAL_HEIGHT * 0.55, 
-            r: 40 + Math.random() * 50 
+            y: Math.random() * VIRTUAL_HEIGHT, 
+            // 💡 円の大きさを少し大きく（半径 50 〜 110）
+            r: 50 + Math.random() * 60 
         };
         
-        if (newCircle.x > VIRTUAL_WIDTH * 0.42 && newCircle.x < VIRTUAL_WIDTH * 0.58) {
+        // 中央の禁止エリア（幅 約96px）
+        if (newCircle.x > VIRTUAL_WIDTH * 0.46 && newCircle.x < VIRTUAL_WIDTH * 0.54) {
             continue;
         }
 
         let tooClose = false;
         for (let c of terrainCircles) {
             const dist = Math.sqrt((newCircle.x - c.x)**2 + (newCircle.y - c.y)**2);
-            if (dist < (newCircle.r + c.r + 50)) { tooClose = true; break; }
+            
+            // 💡 円が大きくなったので、中心同士の最低距離も 100px に調整
+            const minCenterDistance = 100; 
+            
+            if (dist < minCenterDistance) { 
+                tooClose = true; 
+                break; 
+            }
         }
-        if (!tooClose) terrainCircles.push(newCircle);
+
+        if (!tooClose) {
+            terrainCircles.push(newCircle);
+            if (isLeft) leftCount++; else rightCount++;
+        }
     }
 }
+
+// 💡 2. プレイヤーの配置ロジック（埋まり防止・直線並び防止）
+function placePlayers() {
+    // プレイヤーの初期化
+    players = [
+        { id: 1, x: 0, y: 0, r: 8, isAlive: true, angle: 0, name: "PLAYER 1" },
+        { id: 2, x: 0, y: 0, r: 8, isAlive: true, angle: 0, name: "PLAYER 2" }
+    ];
+
+    let placementAttempts = 0;
+    let validPlacement = false;
+
+    while (!validPlacement && placementAttempts < 1000) {
+        placementAttempts++;
+
+        // ① プレイヤー1 (左側 5% 〜 15% の位置)
+        players[0].x = VIRTUAL_WIDTH * 0.05 + Math.random() * (VIRTUAL_WIDTH * 0.10);
+        players[0].y = VIRTUAL_HEIGHT * 0.2 + Math.random() * (VIRTUAL_HEIGHT * 0.6);
+
+        // ② プレイヤー2 (右側 85% 〜 95% の位置)
+        players[1].x = VIRTUAL_WIDTH * 0.85 + Math.random() * (VIRTUAL_WIDTH * 0.10);
+        players[1].y = VIRTUAL_HEIGHT * 0.2 + Math.random() * (VIRTUAL_HEIGHT * 0.6);
+
+        // --- 判定1: プレイヤー同士が直線上に並んでいないか？ ---
+        // Y座標（高さ）の差が 120px 以上あることを保証する
+        const heightDifference = Math.abs(players[0].y - players[1].y);
+        if (heightDifference < 120) {
+            continue; // 高低差が足りなければ最初から決め直し
+        }
+
+        // --- 判定2: プレイヤーが地形（円）に埋まっていないか？ ---
+        let p1IsBuried = false;
+        let p2IsBuried = false;
+
+        for (let c of terrainCircles) {
+            const distToP1 = Math.sqrt((players[0].x - c.x)**2 + (players[0].y - c.y)**2);
+            const distToP2 = Math.sqrt((players[1].x - c.x)**2 + (players[1].y - c.y)**2);
+
+            // プレイヤーの半径(15px) + 円の半径(c.r) + 余裕(15px)
+            // つまり、円の表面から 15px 以上離れていることを確認
+            if (distToP1 < (c.r + 30)) {
+                p1IsBuried = true;
+            }
+            if (distToP2 < (c.r + 30)) {
+                p2IsBuried = true;
+            }
+        }
+
+        // どちらも埋まっておらず、高低差もバッチリなら確定！
+        if (!p1IsBuried && !p2IsBuried) {
+            validPlacement = true;
+        }
+    }
+}
+
 
 function isInTerrain(px, py) {
     const inAnyTerrain = terrainCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
     const inAnyDestroyed = destroyedCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
     return inAnyTerrain && !inAnyDestroyed;
-}
-
-// 【改善点】安全に生成するためのロジックの更なる厳格化（埋まり防止）
-function placePlayers() {
-    players = [];
-    const minSafetyDistance = 135; // 安全判定を「半径3マス+α (135px)」に少しだけ強化
-
-    for (let i = 0; i < 2; i++) {
-        let placed = false;
-        let px = 0;
-        let py = 0;
-        let attempts = 0;
-
-        while (!placed && attempts < 2000) {
-            attempts++;
-            if (i === 0) {
-                px = VIRTUAL_WIDTH * 0.08 + Math.random() * (VIRTUAL_WIDTH * 0.16); 
-            } else {
-                px = VIRTUAL_WIDTH * 0.76 + Math.random() * (VIRTUAL_WIDTH * 0.16);
-            }
-            py = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.65);
-
-            // 1. 地形の「内部」に座標自体が入っていないか、かつ安全な余白距離があるかをダブルチェック
-            let isInsideOrTooClose = false;
-            for (let c of terrainCircles) {
-                const dist = Math.sqrt((px - c.x)**2 + (py - c.y)**2);
-                if (dist < (c.r + minSafetyDistance)) {
-                    isInsideOrTooClose = true;
-                    break;
-                }
-            }
-
-            if (!isInsideOrTooClose && py < VIRTUAL_HEIGHT - 60) {
-                players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true, angle: 0, name: `PLAYER ${i+1}` });
-                placed = true;
-            }
-        }
-
-        // 完全に安全なエリアが見つからなかったときの代替処置（画面端の安全な空中）
-        if (!placed) {
-            px = (i === 0) ? VIRTUAL_WIDTH * 0.08 : VIRTUAL_WIDTH * 0.92;
-            py = VIRTUAL_HEIGHT * 0.2;
-            players.push({ x: px, y: py, r: 8, id: i + 1, isAlive: true, angle: 0, name: `PLAYER ${i+1}` });
-        }
-    }
 }
 
 function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1) {
