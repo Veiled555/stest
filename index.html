@@ -8,20 +8,45 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
+<div id="lobbyModal" class="modal-layer">
+    <div class="lobby-box">
+        <h2>Graphwar</h2>
+        
+        <div id="modeSelectStep">
+            <p>Play!</p>
+            <button id="singlePlayBtn" style="margin-bottom: 12px; background: #4a7c59;">1人で遊ぶ</button>
+            <button id="multiPlayBtn">2人で遊ぶ</button>
+        </div>
 
-    <div id="lobbyModal" class="modal-layer">
-        <div class="lobby-box">
-            <h2>Graphwar Online</h2>
+        <div id="inputStep" style="display: none;">
             <div style="margin-bottom: 10px; text-align: left;">
                 <label style="color: #ccc; font-size: 14px;">プレイヤー名:</label>
                 <input type="text" id="playerNameInput" placeholder="プレイヤー名" style="margin-top: 5px; margin-bottom: 10px;">
             </div>
-            <p>友達と同じ「合言葉」を入力してください</p>
-            <input type="text" id="roomInput" value=""><br>
             
-            <button id="joinButton">対戦部屋に入る</button>
+            <div id="roomInputGroup">
+                <p>「合言葉」を入力してください</p>
+                <input type="text" id="roomInput" value=""><br>
+            </div>
+            
+            <button id="joinButton">ゲームを開始する</button>
+            <button id="backToModeBtn" style="margin-top: 10px; background: #444;">戻る</button>
         </div>
+<div id="waitingStep" style="display: none;">
+    <p id="waitingStatusText" style="margin-bottom: 20px;">対戦相手を探しています...</p>
+    
+    <div class="spinner-container">
+        <svg class="loading-spinner" viewBox="0 0 50 50">
+            <circle class="spinner-path" cx="25" cy="25" r="20" fill="none" stroke-width="4"></circle>
+        </svg>
     </div>
+
+    <button id="cancelWaitBtn" style="background: #a93226; margin-top: 20px;">対戦をキャンセル</button>
+</div>
+
+    </div>
+</div>
+
 
     <div id="resultModal" class="modal-layer" style="display: none;">
         <div class="lobby-box">
@@ -43,7 +68,7 @@
         <div class="bar-row inputs-column">
             <div class="formula-box">
                 <span class="prefix">f(x) =</span>
-                <input type="text" id="formulaInput" value="" placeholder="数式を入力してください">
+                <input type="text" id="formulaInput" value="" placeholder="式を入力してください">
             </div>
             
             <div class="bottom-inputs-row">
@@ -79,4 +104,3 @@
 
     </body>
 </html>
-
