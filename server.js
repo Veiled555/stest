@@ -93,21 +93,32 @@ socket.on('leaveRoom', ({ roomCode }) => {
     
     const room = rooms[roomCode];
     if (room) {
-        // 💡 修正：players は ID の配列なので直接比較する
+        // 1. 部屋の players 配列から退室したユーザーの ID を確実に除去
         room.players = room.players.filter(id => id !== socket.id);
         
-        // 誰もいなくなったら部屋を削除
+        // 2. もし退室したのがホスト（1人目）だった場合、ホストIDを更新するか部屋をリセットする
+        if (room.hostId === socket.id) {
+            if (room.players.length > 0) {
+                // まだ誰か残っていればその人を新しいホストにする
+                room.hostId = room.players[0];
+            } else {
+                // 誰もいなくなったら部屋データを完全に削除！
+                delete rooms[roomCode];
+                console.log(`🧹 部屋「${roomCode}」は空になったため削除されました。`);
+                return;
+            }
+        }
+
+        // 3. 誰もいなくなった場合の安全策（念のため）
         if (room.players.length === 0) {
             delete rooms[roomCode];
+            console.log(`🧹 部屋「${roomCode}」は空になったため削除されました。`);
         } else {
             // 残ったプレイヤーに相手が退出したことを通知
             socket.to(roomCode).emit('playerLeft');
         }
     }
 });
-
-
-
     // 💡 改善①：だれかが切断したときの処理
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
