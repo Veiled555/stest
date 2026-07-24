@@ -93,29 +93,10 @@ html, body {
     outline: none;
     font-size: 16px;
     border-radius: 4px;
-    
-  
-    white-space: nowrap;              
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
 }
 
 #formulaInput:focus {
     border-color: #eee;
-}
-
-#formulaInput::-webkit-scrollbar {
-    height: 4px;
-}
-#formulaInput::-webkit-scrollbar-track {
-    background: transparent;   
-}
-#formulaInput::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 2px;
-}
-#formulaInput::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.35);
 }
 
 #buttons {
@@ -315,4 +296,54 @@ html, body {
 .log-item {
     margin-bottom: 2px;
     word-break: break-all;
+}
+
+.spinner-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 25px 0;
+}
+
+.loading-spinner {
+    width: 50px;
+    height: 50px;
+    transform: rotate(-90deg); 
+}
+
+.spinner-path {
+    stroke: #c0c0c0;
+    stroke-linecap: round;
+    stroke-dasharray: 125.6 125.6; 
+    stroke-dashoffset: 0;
+    animation: customCircleLoop 2.6s linear infinite;
+}
+
+@keyframes customCircleLoop {
+    0% {
+        stroke-dashoffset: 0;
+        opacity: 1;
+        animation-timing-function: ease-in-out;
+    }
+    45.9% {
+        stroke-dashoffset: -125.6;
+        opacity: 1;
+    }
+    46% {
+        stroke-dashoffset: -125.6;
+        opacity: 0;
+    }
+    50% {
+        stroke-dashoffset: -125.6;
+        opacity: 0;
+    }
+    50.1% {
+        stroke-dashoffset: -125.6;
+        opacity: 1;
+        animation-timing-function: ease-in-out;
+    }
+    100% {
+        stroke-dashoffset: -251.2;
+        opacity: 1;
+    }
 }
