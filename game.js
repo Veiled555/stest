@@ -731,27 +731,23 @@ function updateTurnButtonState() {
 function initGame() {
     if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
     isAnimating = false; errorDisplay.innerText = "";
-    if (canvas.width === 0 || canvas.height === 0) {
-        const containerRect = document.getElementById('game').getBoundingClientRect();
-        canvas.width = containerRect.width || window.innerWidth;
-        canvas.height = containerRect.height || window.innerHeight;
-    }
-    updateScale();
+
+    // 💡 直書きされていた canvas.width 設定を resizeCanvas に任せる
+    resizeCanvas();
+
     generateTerrain(); 
     placePlayers(); 
     
     if(players[0]) players[0].name = (myPlayerId === 1) ? getMyName() : "PLAYER 1";
     if(players[1]) players[1].name = (myPlayerId === 2) ? getMyName() : "PLAYER 2";
 
-	currentPlayerIndex = Math.floor(Math.random() * 2); 
     const angleInput = document.getElementById('angleInput');
     if (angleInput) angleInput.value = "0";
-    
-    // 💡【追加】再戦やゲーム初期化の際に、入力されていた式を空にする
     if (formulaInput) formulaInput.value = "";
     
     drawStage();
 }
+
 
 function createExplosionEffects(ex, ey) {
     for (let i = 0; i < 30; i++) {
@@ -768,12 +764,24 @@ function createExplosionEffects(ex, ey) {
 
 function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width; canvas.height = rect.height;
+    if (rect.width === 0 || rect.height === 0) return;
+
+    // スマホの高解像度倍率を取得（Retina対応）
+    const dpr = window.devicePixelRatio || 1;
+
+    // Canvas内部の描画ドット数を倍率分拡大してクッキリさせる
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+
+    // 画面上の見た目の表示サイズを指定
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+
     updateScale(); 
     drawStage();
 }
 
-// 💡 1. 改善された地形生成ロジック
+// 1. 改善された地形生成ロジック
 function generateTerrain() {
     terrainCircles = []; 
     destroyedCircles = [];
@@ -967,34 +975,45 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-    players.forEach(p => {
-        if (p.isAlive) {
-            let finalColor = '#333333'; 
-            if (myPlayerId === 1) { finalColor = (p.id === 1) ? '#0088cc' : '#e65100'; }
-            else if (myPlayerId === 2) { finalColor = (p.id === 2) ? '#e65100' : '#0088cc'; }
-            else { finalColor = (p.id === 1) ? '#0088cc' : '#e65100'; }
+    // drawStage 内の players.forEach 部分
+players.forEach(p => {
+    if (p.isAlive) {
+        let finalColor = '#333333'; 
+        if (myPlayerId === 1) { finalColor = (p.id === 1) ? '#0088cc' : '#e65100'; }
+        else if (myPlayerId === 2) { finalColor = (p.id === 2) ? '#e65100' : '#0088cc'; }
+        else { finalColor = (p.id === 1) ? '#0088cc' : '#e65100'; }
 
-            ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-            
-            if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
-                ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
-            }
-
-            ctx.fillStyle = '#000000';
-            ctx.font = 'bold 12px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(p.name || `PLAYER ${p.id}`, p.x, p.y - 14);
-
-            const rad = ((p.angle || 0) * Math.PI) / 180;
-            //const dirX = (p.id === 1) ? 1 : -1;
-			 const dirX = (p.x < VIRTUAL_WIDTH / 2) ? 1 : -1;
-
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 2.5; ctx.beginPath();
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30 * dirX);
-            ctx.stroke();
+        ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        
+        if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
         }
-    });
+
+        // 💡 プレイヤー名の文字サイズ拡大＆白縁取り
+        ctx.save();
+        ctx.font = 'bold 16px sans-serif'; // 12px から 16px に変更
+        ctx.textAlign = 'center';
+        
+        // 白い縁取り（見やすさ向上）
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.strokeText(p.name || `PLAYER ${p.id}`, p.x, p.y - 18);
+        
+        // 黒文字本体
+        ctx.fillStyle = '#000000';
+        ctx.fillText(p.name || `PLAYER ${p.id}`, p.x, p.y - 18);
+        ctx.restore();
+
+        const rad = ((p.angle || 0) * Math.PI) / 180;
+        const dirX = (p.x < VIRTUAL_WIDTH / 2) ? 1 : -1;
+
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 2.5; ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30 * dirX);
+        ctx.stroke();
+    }
+});
+
 
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
@@ -1051,9 +1070,8 @@ document.body.addEventListener('input', (e) => {
 });
 
 window.addEventListener('resize', resizeCanvas);
+// ページ読み込み時の処理
 window.addEventListener('load', () => {
     detectDevice();
-    const rect = canvas.getBoundingClientRect(); canvas.width = rect.width; canvas.height = rect.height;
-    updateScale();
-    drawStage();
+    resizeCanvas();
 });
