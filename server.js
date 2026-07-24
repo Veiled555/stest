@@ -25,63 +25,88 @@ socket.on('syncAngle', (data) => {
     socket.to(data.roomCode).emit('receiveAngleSync', data);
 });
 
-    socket.on('joinRoom', (roomCode, callback) => {
-        socket.join(roomCode);
+    // server.js
+socket.on('joinRoom', (roomCode, callback) => {
+    socket.join(roomCode);
 
-        // 既に存在する部屋で、前のプレイヤーが残っている古い残骸があればクリーンアップ
-        if (rooms[roomCode] && rooms[roomCode].players.length >= 2) {
-             // テストをスムーズにするため満杯なら一旦消して作り直す
-             delete rooms[roomCode]; 
-        }
+    // 部屋がまだ存在しない場合は作成（1人目）
+    if (!rooms[roomCode]) {
+        rooms[roomCode] = {
+            hostId: socket.id,
+            players: [socket.id],
+            rematchRequests: {}
+        };
+        socket.emit('roomJoined', { playerId: 1, isHost: true });
+    } 
+    // 既に部屋が存在し、1人だけ待っている場合（2人目）
+    else if (rooms[roomCode].players.length === 1) {
+        rooms[roomCode].players.push(socket.id);
+        socket.emit('roomJoined', { playerId: 2, isHost: false, isReady: true });
+        
+        // 2人揃ったので部屋全体に同期開始（ゲーム開始）の合図を送る
+        io.to(roomCode).emit('startSyncProcess');
+    } 
+    // すでに2人満員の場合
+    else {
+        socket.emit('roomError', 'この部屋はすでに満員です。');
+        socket.leave(roomCode);
+    }
 
-        if (!rooms[roomCode]) {
-            rooms[roomCode] = {
-                hostId: socket.id,
-                players: [socket.id],
-                rematchRequests: {} // 再戦希望を記録する箱
-            };
-            socket.emit('roomJoined', { playerId: 1, isHost: true });
-        } else {
-            const room = rooms[roomCode];
-            if (room.players.length < 2) {
-                room.players.push(socket.id);
-                socket.emit('roomJoined', { playerId: 2, isHost: false });
-                io.to(roomCode).emit('startSyncProcess');
-            }
-        }
-        if (typeof callback === 'function') callback({ status: 'ok' });
-    });
+    if (typeof callback === 'function') callback({ status: 'ok' });
+});
+
 
     socket.on('syncTerrain', (data) => {
         io.to(data.roomCode).emit('receiveTerrain', {
             terrain: data.terrain,
-            players: data.players
+            players: data.players,
+            startingPlayerIndex: data.startingPlayerIndex
         });
     });
 
     socket.on('sendFormula', (data) => {
-        // data には { roomCode, formula, senderName } が入っています
         socket.to(data.roomCode).emit('receiveFormula', data);
     });
 
-    // 💡 改善③：再戦リクエストの処理
-    socket.on('requestRematch', (data) => {
-        const room = rooms[data.roomCode];
-        if (!room) return;
+    // server.js 内の requestRematch 部分
+socket.on('requestRematch', (data) => {
+    const room = rooms[data.roomCode];
+    if (!room) return;
 
-        room.rematchRequests[data.myPlayerId] = true;
+    room.rematchRequests[data.myPlayerId] = true;
+    
+    // 相手に「再戦したがってるよ」と通知
+    socket.to(data.roomCode).emit('opponentWantsRematch');
+
+    // 💡 2人とも再戦ボタンを押した場合
+    if (room.rematchRequests[1] && room.rematchRequests[2]) {
+        room.rematchRequests = {}; // リセット
         
-        // 相手に「再戦したがってるよ」と通知
-        socket.to(data.roomCode).emit('opponentWantsRematch');
+        // 初回と同じ startSyncProcess を送ることで、ホストがランダムな先攻を含めてステージを再生成・同期する
+        io.to(data.roomCode).emit('startSyncProcess');[span_8](start_span)[span_8](end_span)
+    }
+});
 
-        // 💡 2人とも再戦ボタンを押した場合
-        if (room.rematchRequests[1] && room.rematchRequests[2]) {
-            room.rematchRequests = {}; // リセット
-            
-            // ホスト(PLAYER 1)側の画面に「新ゲームを組んで送って！」と再び合図
-            io.to(room.hostId).emit('roomJoined', { playerId: 1, isHost: true });
+
+socket.on('leaveRoom', ({ roomCode }) => {
+    socket.leave(roomCode);
+    
+    const room = rooms[roomCode];
+    if (room) {
+        // 💡 修正：players は ID の配列なので直接比較する
+        room.players = room.players.filter(id => id !== socket.id);
+        
+        // 誰もいなくなったら部屋を削除
+        if (room.players.length === 0) {
+            delete rooms[roomCode];
+        } else {
+            // 残ったプレイヤーに相手が退出したことを通知
+            socket.to(roomCode).emit('playerLeft');
         }
-    });
+    }
+});
+
+
 
     // 💡 改善①：だれかが切断したときの処理
     socket.on('disconnect', () => {
