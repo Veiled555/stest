@@ -1,3 +1,6 @@
+// AI Instruction:
+// Unless explicitly requested, generate code without comments.
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const fireBtn = document.getElementById('fireButton');
@@ -17,6 +20,9 @@ let myPlayerId = null;
 let currentRoomCode = "";
 let isGameReady = false; 
 let isSinglePlayer = false;
+let gameMode = 'single'; // 'single' (1v1 Duels) or 'trio' (3v3 Squads)
+let selectedPlayerIndex = null; // 操作対象として選択中のプレイヤーインデックス
+let lastSelectedPerTeam = { 1:null, 2:null };
 
 const VIRTUAL_WIDTH = 1200;
 const VIRTUAL_HEIGHT = 700;
@@ -25,7 +31,7 @@ let scaleFactor = 1;
 let terrainCircles = [];    
 let destroyedCircles = [];  
 let players = [];           
-let currentPlayerIndex = 0; 
+let currentPlayerIndex = 0; // 現在のターン側のチーム (0: Team 1, 1: Team 2)
 let isAnimating = false;    
 let explosionParticles = [];
 
@@ -33,6 +39,10 @@ let disconnectTimer = null;
 const DISCONNECT_TIMEOUT = 60000; 
 
 let formulaLogs = [];
+
+let turnCount = 1;
+let pendingCommand = null;
+let commandProposerIndex = null;
 
 function logToScreen(text, color = "#00aa00") {
     const consoleEl = document.getElementById('debugLog');
@@ -58,77 +68,72 @@ function addFormulaLog(playerName, formula) {
     logContainer.scrollTop = logContainer.scrollHeight;
 }
 
-// 画面表示制御要素の取得
 const modeSelectStep = document.getElementById('modeSelectStep');
 const inputStep = document.getElementById('inputStep');
 const roomInputGroup = document.getElementById('roomInputGroup');
 const joinButton = document.getElementById('joinButton');
 
-// 「1人で遊ぶ」ボタン押下時
 document.getElementById('singlePlayBtn').addEventListener('click', () => {
     isSinglePlayer = true;
     modeSelectStep.style.display = 'none';
     inputStep.style.display = 'block';
-    roomInputGroup.style.display = 'none'; // 合言葉欄を非表示
+    roomInputGroup.style.display = 'none';
     joinButton.innerText = "1人で遊ぶ (スタート)";
 });
 
-// 「2人で遊ぶ」ボタン押下時
 document.getElementById('multiPlayBtn').addEventListener('click', () => {
     isSinglePlayer = false;
     modeSelectStep.style.display = 'none';
     inputStep.style.display = 'block';
-    roomInputGroup.style.display = 'block'; // 合言葉欄を表示
+    roomInputGroup.style.display = 'block';
     joinButton.innerText = "対戦部屋に入る";
 });
 
-// 「戻る」ボタン押下時
 document.getElementById('backToModeBtn').addEventListener('click', () => {
     inputStep.style.display = 'none';
     modeSelectStep.style.display = 'block';
 });
 
-// UI要素の追加取得
 const waitingStep = document.getElementById('waitingStep');
 const waitingStatusText = document.getElementById('waitingStatusText');
 const cancelWaitBtn = document.getElementById('cancelWaitBtn');
 
-// --- 部屋参加・ゲーム開始処理 ---
 joinButton.addEventListener('click', () => {
+    const modeSelect = document.getElementById('gameModeSelect');
+    if (modeSelect) gameMode = modeSelect.value;
+
     if (isSinglePlayer) {
-        // 1人プレイモード
         myPlayerId = 1;
         initGame();
         
         const pName = getMyName();
-        players[0].name = `${pName} (P1)`;
-        players[1].name = `${pName} (P2)`;
+        players.forEach(p => {
+            p.name = `${pName} (${p.id === 1 ? 'T1' : 'T2'}-${p.unitIndex + 1})`;
+        });
 
         isGameReady = true;
         isAnimating = false;
 
         document.getElementById('lobbyModal').style.display = 'none';
         
+        autoSelectActivePlayer();
         updateScale();
         updateTurnDisplay();
         updateTurnButtonState();
         drawStage();
     } else {
-        // 2人オンライン対戦モード
-        const roomCode = document.getElementById('roomInput').value.trim();
-        if (!roomCode) {
+        const rawRoomCode = document.getElementById('roomInput').value.trim();
+        if (!rawRoomCode) {
             alert("合言葉を入力してください");
             return;
         }
-        currentRoomCode = roomCode;
+        currentRoomCode = `${gameMode}:${rawRoomCode}`;
 
-        // 入力画面を隠して待機画面を表示（モーダル全体は消さない）
         inputStep.style.display = 'none';
         waitingStep.style.display = 'block';
-        waitingStatusText.innerText = `部屋「${roomCode}」で対戦相手を待っています...`;
+        waitingStatusText.innerText = `部屋「${rawRoomCode}」(${gameMode === 'trio' ? '3v3 Squads' : '1v1 Duels'}) で対戦相手を待っています...`;
 
-        logToScreen(`🚀 部屋「${roomCode}」への入場リクエストを送信します...`);
-        socket.emit('joinRoom', roomCode, (response) => {
+        socket.emit('joinRoom', currentRoomCode, (response) => {
             if (response && response.status === 'ok') {
                 logToScreen(`✅ サーバーが要請を受信しました。`, "#00ff00");
             }
@@ -136,7 +141,6 @@ joinButton.addEventListener('click', () => {
     }
 });
 
-// キャンセルボタン押下時
 cancelWaitBtn.addEventListener('click', () => {
     if (currentRoomCode) {
         socket.emit('leaveRoom', { roomCode: currentRoomCode });
@@ -144,8 +148,6 @@ cancelWaitBtn.addEventListener('click', () => {
     }
     
     myPlayerId = null; 
-    
-    // 待機画面を閉じ、入力画面に戻す
     waitingStep.style.display = 'none';
     inputStep.style.display = 'block';
 });
@@ -162,19 +164,15 @@ socket.on('connect', () => {
     if(!myPlayerId) {
         turnDisplay.innerText = "接続成功。部屋を入力してください";
     }
-    logToScreen(`✅ サーバーと通信が繋がりました！(SocketID: ${socket.id})`);
 });
 
 socket.on('connect_error', (err) => {
     logToScreen(`❌ 通信接続エラー: ${err.message}`, "#ff3333");
 });
 
-// 部屋参加時の通知を受信
 socket.on('roomJoined', (data) => {
     myPlayerId = data.playerId;
-    logToScreen(`🚪 部屋に入りました。(Player ID: ${myPlayerId})`);
 
-    // 1人目（ホスト）の場合は、モーダルを開いたまま「待機中」を維持
     if (myPlayerId === 1 && !data.isReady) {
         waitingStep.style.display = 'block';
         inputStep.style.display = 'none';
@@ -192,15 +190,14 @@ socket.on('startSyncProcess', () => {
     if (lobbyModal) lobbyModal.style.display = 'none';
 
     if (myPlayerId === 1) {
-        logToScreen(`👥 相手が揃いました。ステージを生成して地形データを送信します。`);
-        
         initGame(); 
         const firstIndex = Math.floor(Math.random() * 2);
         currentPlayerIndex = firstIndex;
 
-        if (players[0]) players[0].name = getMyName();
-        
-        logToScreen(`🎲 [送信前] ホストが決定した先攻: Player ${firstIndex + 1}`);
+        const myName = getMyName();
+        players.forEach(p => {
+            if (p.id === 1) p.name = `${myName}-${p.unitIndex + 1}`;
+        });
 
         socket.emit('syncTerrain', {
             roomCode: currentRoomCode,
@@ -211,106 +208,97 @@ socket.on('startSyncProcess', () => {
     }
 });
 
-
-
-
-
 socket.on('roomError', (msg) => {
-    logToScreen(`⚠️ 部屋エラー: ${msg}`, "#ff3333");
-    turnDisplay.innerText = `⚠️ ${msg}`;
     alert(msg); 
 });
 
 socket.on('receiveTerrain', (data) => {
-    logToScreen(`🌍 地形が完全同期されました！ゲーム開始！`);
-    
-    console.log("receiveTerrain data:", data);
-    logToScreen(`📥 届いた startingPlayerIndex: ${data ? data.startingPlayerIndex : 'undefined'}`);
-
     terrainCircles = data.terrain;
     players = data.players;
+    destroyedCircles = []; // 破壊データを確実にリセット
 
     if (data && typeof data.startingPlayerIndex === 'number') {
         currentPlayerIndex = data.startingPlayerIndex;
     } else {
-        logToScreen(`⚠️ startingPlayerIndex の取得に失敗したためデフォルト(P1)に設定しました`, "#ff3333");
         currentPlayerIndex = 0;
     }
 
-    logToScreen(`🎲 先攻決定: Player ${currentPlayerIndex + 1} のターンです`);
+    const myName = getMyName();
+    if (myPlayerId === 2) {
+        players.forEach(p => {
+            if (p.id === 2) p.name = `${myName}-${p.unitIndex + 1}`;
+        });
+    }
 
-    if (myPlayerId === 2 && players[1]) {
-        players[1].name = getMyName();
-        socket.emit('syncAngle', {
-            roomCode: currentRoomCode,
-            playerIndex: 1,
-            angle: players[1].angle,
-            senderName: players[1].name
-        });
-    }
-    if (myPlayerId === 1 && players[0]) {
-        socket.emit('syncAngle', {
-            roomCode: currentRoomCode,
-            playerIndex: 0,
-            angle: players[0].angle,
-            senderName: players[0].name
-        });
-    }
-    
-    destroyedCircles = [];
     isGameReady = true; 
     isAnimating = false; 
+    turnCount = 1;
+    pendingCommand = null;
+    commandProposerIndex = null;
     
     if (formulaInput) formulaInput.value = "";
     
     document.getElementById('lobbyModal').style.display = 'none';
     document.getElementById('resultModal').style.display = 'none'; 
     
+    autoSelectActivePlayer();
     updateScale(); 
-    // 💡 確実に先攻インデックスがセットされた後に表示・状態を更新
     updateTurnDisplay();
     updateTurnButtonState();
     drawStage();
 });
 
-
-
 socket.on('receiveFormula', (data) => {
-    // 相手から送られてきたオブジェクトから式と名前を解析
     const formula = (data && data.formula) ? data.formula : data;
     const senderName = (data && data.senderName) ? data.senderName : null;
-    
-    if (players[currentPlayerIndex] && senderName) {
-        // 相手の名前をプレイヤーオブジェクトに確実にセット
-        players[currentPlayerIndex].name = senderName;
+    const remoteShooterIndex = (data && typeof data.shooterIndex === 'number') ? data.shooterIndex : null;
+
+    if (remoteShooterIndex !== null && players[remoteShooterIndex]) {
+        selectedPlayerIndex = remoteShooterIndex;
+        if (senderName) players[remoteShooterIndex].name = senderName;
     }
     
-    logToScreen(`📢 相手が数式を送信しました。発射シーケンスを開始します。`);
     executeFireShot(formula, true); 
+});
+
+socket.on('receiveCommand', (data) => {
+    const { command, senderIndex } = data;
+    
+    if (command === '--skip') {
+        addFormulaLog(getTeamName(senderIndex + 1), '--skip');
+        switchTurn();
+    } else if (command === '--reset' || command === '--end') {
+        addFormulaLog(getTeamName(senderIndex + 1), command);
+        pendingCommand = command.replace('--', '');
+        commandProposerIndex = senderIndex;
+        
+        switchTurn();
+    }
+});
+
+socket.on('commandCancelled', (data) => {
+    errorDisplay.innerText = "コマンド要求は相手によって拒否されました。";
+    pendingCommand = null;
+    commandProposerIndex = null;
+    updateTurnDisplay();
+    updateTurnButtonState();
 });
 
 socket.on('opponentDisconnected', () => {
     if (disconnectTimer) return; 
 
-    logToScreen(`⚠️ 対戦相手の接続が切れました。1分間再接続を待ちます...`, "#ffcc00");
     turnDisplay.innerText = "⚠️ 相手の通信切断：再接続を待機中（60秒）";
     disableControlsTemporarily();
 
     disconnectTimer = setTimeout(() => {
-        logToScreen(`⏰ 1分が経過しました。ゲームを終了します。`, "#ff3333");
         showResultMenu("対戦中断", "相手の通信が1分以上途絶えたため、ゲームを終了しました。");
         isGameReady = false;
     }, DISCONNECT_TIMEOUT);
 });
 
 socket.on('opponentWantsRematch', () => {
-    logToScreen(`🔔 対戦相手が「再戦」を希望しています！`, "#ffdd00");
     if (myPlayerId === 1) {
-        logToScreen(`👑 あなたがホストですので、新しいステージを作成してゲームを再開します...`);
-        
         initGame();
-        
-        // 💡 再戦時も確実に 0 か 1 をランダム決定する
         currentPlayerIndex = Math.floor(Math.random() * 2);
 
         socket.emit('syncTerrain', {
@@ -322,7 +310,6 @@ socket.on('opponentWantsRematch', () => {
     }
 });
 
-// 角度や名前の同期データを受信したとき
 socket.on('receiveAngleSync', (data) => {
     if (players[data.playerIndex]) {
         players[data.playerIndex].angle = data.angle;
@@ -333,29 +320,24 @@ socket.on('receiveAngleSync', (data) => {
     }
 });
 
-// 修正後：再戦ボタン押下時の処理
 document.getElementById('rematchButton').addEventListener('click', () => {
     if (isSinglePlayer) {
-        // 1人プレイ時はそのままステージを再生成して開始
         initGame();
         const pName = getMyName();
-        players[0].name = `${pName} (P1)`;
-        players[1].name = `${pName} (P2)`;
+        players.forEach(p => {
+            p.name = `${pName} (${p.id === 1 ? 'T1' : 'T2'}-${p.unitIndex + 1})`;
+        });
         isGameReady = true;
         document.getElementById('resultModal').style.display = 'none';
+        autoSelectActivePlayer();
         updateTurnDisplay();
         updateTurnButtonState();
     } else {
-        // オンライン時
-        logToScreen(`🔄 再戦リクエストを送信しました...`);
         socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
-        
-        // ホストもゲストも、相手の同意とサーバーからの指示を待つように統一
         turnDisplay.innerText = "対戦相手の再戦同意を待っています...";
         disableControlsTemporarily();
     }
 });
-
 
 document.getElementById('leaveButton').addEventListener('click', () => {
     location.reload(); 
@@ -374,19 +356,129 @@ function disableControlsTemporarily() {
     fireBtn.style.cursor = "not-allowed";
 }
 
+function autoSelectActivePlayer() {
+    const currentTeam = currentPlayerIndex + 1;
+    
+    // 【修正】まず直前までそのチームが選択していたインデックスを取得
+    let targetIndex = lastSelectedPerTeam[currentTeam];
+
+    // 直前の選択が有効（生存中かつ同じチーム）ならそれを維持
+    if (targetIndex !== null && players[targetIndex] && players[targetIndex].id === currentTeam && players[targetIndex].isAlive) {
+        selectedPlayerIndex = targetIndex;
+        syncAngleInput();
+        return;
+    }
+
+    // 保持されていた選択が無効な場合は、チームの先頭の生存ユニットを自動選択
+    const foundIndex = players.findIndex(p => p.id === currentTeam && p.isAlive);
+    selectedPlayerIndex = (foundIndex !== -1) ? foundIndex : null;
+    lastSelectedPerTeam[currentTeam] = selectedPlayerIndex;
+
+    syncAngleInput();
+}
+
+function syncAngleInput() {
+    const angleInput = document.getElementById('angleInput');
+    if (angleInput && selectedPlayerIndex !== null && players[selectedPlayerIndex]) {
+        angleInput.value = players[selectedPlayerIndex].angle || 0;
+    }
+}
+
+function switchTurn() {
+    currentPlayerIndex = (currentPlayerIndex + 1) % 2;
+    turnCount++;
+    autoSelectActivePlayer();
+    updateTurnDisplay();
+    updateTurnButtonState();
+}
+
+function getTeamName(teamId) {
+    if (teamId === 1) return "Player 1";
+    if (teamId === 2) return "Player 2";
+    return "Player";
+}
+
+function checkTeamAlive(teamId) {
+    return players.some(p => p.id === teamId && p.isAlive);
+}
+
+function countTeamAlive(teamId) {
+    return players.filter(p => p.id === teamId && p.isAlive).length;
+}
+
+canvas.addEventListener('click', (e) => {
+    if (!isGameReady || isAnimating) return;
+
+    // 現在のターンになっているチーム ID (1 または 2)
+    const activeTeam = currentPlayerIndex + 1;
+
+    // オンラインで自分のターンではない場合はクリック無効
+    if (!isSinglePlayer && myPlayerId !== activeTeam) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clickX = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const clickY = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // 描画基準(通常時は常に画面中央)と一致させる
+    const camX = VIRTUAL_WIDTH / 2;
+    const camY = VIRTUAL_HEIGHT / 2;
+
+    const worldClickX = (clickX - canvas.width / 2) / scaleFactor + camX;
+    const worldClickY = (clickY - canvas.height / 2) / scaleFactor + camY;
+
+    // 現在のターンのチームの生きているプレイヤーのみ選択可能にする
+    players.forEach((p, idx) => {
+        if (p.id === activeTeam && p.isAlive) {
+            const dist = Math.sqrt((worldClickX - p.x)**2 + (worldClickY - p.y)**2);
+            // 当たり判定領域
+            if (dist < p.r + 30) {
+                selectedPlayerIndex = idx;
+                // 【追加】手動で選択した際もチームの選択状態を記録
+                lastSelectedPerTeam[activeTeam] = idx;
+                syncAngleInput();
+                drawStage();
+            }
+        }
+    });
+});
+
 function fireShot() {
     if (!isGameReady || isAnimating || disconnectTimer) return;
     
-    // 💡 修正: オンライン時は自分のターンのみ発射可能。1人プレイ時は常時発射許可
     if (!isSinglePlayer && myPlayerId !== (currentPlayerIndex + 1)) return;
 
     const currentFormula = formulaInput.value.trim();
     
     if (currentFormula === "") {
-        errorDisplay.innerText = "数式を入力してください。";
+        errorDisplay.innerText = "数式またはコマンドを入力してください。";
         return;
     }
-    
+
+    if (currentFormula.startsWith('--')) {
+        handleCommandInput(currentFormula.toLowerCase());
+        return;
+    }
+
+    if (pendingCommand !== null) {
+        if (currentPlayerIndex !== commandProposerIndex) {
+            const proposerIdx = commandProposerIndex;
+            pendingCommand = null;
+            commandProposerIndex = null;
+
+            if (!isSinglePlayer) {
+                socket.emit('cancelCommand', { roomCode: currentRoomCode });
+            }
+
+            currentPlayerIndex = proposerIdx;
+            formulaInput.value = "";
+            errorDisplay.innerText = "コマンドを拒否し、相手にターンを戻しました。";
+            autoSelectActivePlayer();
+            updateTurnDisplay();
+            updateTurnButtonState();
+            return;
+        }
+    }
+
     const isFirstDeriv = currentFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
     const isSecondDeriv = currentFormula.toLowerCase().replace(/\s+/g, '').startsWith("y''=");
     const formulaString = parseFormula(currentFormula); 
@@ -406,16 +498,116 @@ function fireShot() {
 
     const myName = getMyName();
     
-    // 💡 修正: オンラインの時だけ Socket.io で送信する
     if (!isSinglePlayer) {
         socket.emit('sendFormula', { 
             roomCode: currentRoomCode, 
             formula: currentFormula,
-            senderName: myName 
+            senderName: myName,
+            shooterIndex: selectedPlayerIndex
         });
     }
     
     executeFireShot(currentFormula, false);
+}
+
+function handleCommandInput(cmdStr) {
+    errorDisplay.innerText = "";
+    
+    if (cmdStr === '--skip') {
+        const shooter = players[selectedPlayerIndex];
+        addFormulaLog(shooter ? shooter.name : getTeamName(currentPlayerIndex + 1), '--skip');
+        if (!isSinglePlayer) {
+            socket.emit('sendCommand', {
+                roomCode: currentRoomCode,
+                command: '--skip',
+                senderIndex: currentPlayerIndex
+            });
+        }
+        formulaInput.value = "";
+        switchTurn();
+        return;
+    }
+
+    if (cmdStr === '--reset') {
+        if (turnCount > 2) {
+            errorDisplay.innerText = "--reset はゲーム開始後の1ターン目のみ使用可能です。";
+            return;
+        }
+
+        executeOrProposeCommand('--reset', 'reset');
+        return;
+    }
+
+    if (cmdStr === '--end') {
+        executeOrProposeCommand('--end', 'end');
+        return;
+    }
+
+    errorDisplay.innerText = `無効なコマンドです: ${cmdStr}`;
+}
+
+function executeOrProposeCommand(fullCmd, cmdKey) {
+    const shooter = players[selectedPlayerIndex];
+    const nameToLog = shooter ? shooter.name : getTeamName(currentPlayerIndex + 1);
+
+    if (pendingCommand === cmdKey && commandProposerIndex !== currentPlayerIndex) {
+        addFormulaLog(nameToLog, fullCmd);
+        
+        if (!isSinglePlayer) {
+            socket.emit('sendCommand', {
+                roomCode: currentRoomCode,
+                command: fullCmd,
+                senderIndex: currentPlayerIndex
+            });
+        }
+
+        formulaInput.value = "";
+        pendingCommand = null;
+        commandProposerIndex = null;
+
+        if (cmdKey === 'reset') {
+            if (isSinglePlayer) {
+                initGame();
+                autoSelectActivePlayer();
+                updateTurnDisplay();
+                updateTurnButtonState();
+            } else if (myPlayerId === 1) {
+                initGame();
+                currentPlayerIndex = Math.floor(Math.random() * 2);
+                socket.emit('syncTerrain', {
+                    roomCode: currentRoomCode,
+                    terrain: terrainCircles,
+                    players: players,
+                    startingPlayerIndex: currentPlayerIndex
+                });
+            }
+        } else if (cmdKey === 'end') {
+            const team1Count = countTeamAlive(1);
+            const team2Count = countTeamAlive(2);
+            let endMsg = `合意により終了しました。(Player1: ${team1Count}体 / Player2: ${team2Count}体)`;
+            if (team1Count > team2Count) endMsg += " → Player 1 の勝利！";
+            else if (team2Count > team1Count) endMsg += " → Player 2 の勝利！";
+            else endMsg += " → 引き分け！";
+
+            showResultMenu("GAME OVER", endMsg);
+        }
+    } 
+    else {
+        addFormulaLog(nameToLog, fullCmd);
+        pendingCommand = cmdKey;
+        commandProposerIndex = currentPlayerIndex;
+
+        if (!isSinglePlayer) {
+            socket.emit('sendCommand', {
+                roomCode: currentRoomCode,
+                command: fullCmd,
+                senderIndex: currentPlayerIndex
+            });
+        }
+
+        formulaInput.value = "";
+        switchTurn();
+    }
 }
 
 function updateScale() {
@@ -439,17 +631,19 @@ function parseFormula(inputText) {
     return str;
 }
 
-// isRemote: 相手側の実行かどうかを表すフラグ
-// isRemote: 相手側の実行かどうかを表すフラグ
-
 function executeFireShot(targetFormula, isRemote = false) {
     errorDisplay.innerText = ""; 
     const isFirstDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y'=");
     const isSecondDeriv = targetFormula.toLowerCase().replace(/\s+/g, '').startsWith("y''=");
     const formulaString = parseFormula(targetFormula); 
-    const p = players[currentPlayerIndex];
+
+    if (selectedPlayerIndex === null || !players[selectedPlayerIndex] || !players[selectedPlayerIndex].isAlive) {
+        autoSelectActivePlayer();
+    }
+    const p = players[selectedPlayerIndex];
+    if (!p) return;
     
-    const activePlayerName = p.name && !p.name.startsWith("PLAYER") ? p.name : (p.id === 1 ? (players[0].name || "Player 1") : (players[1].name || "Player 2"));
+    const activePlayerName = p.name || `P${p.id}-${p.unitIndex + 1}`;
     addFormulaLog(activePlayerName, targetFormula);
 
     let calculate;
@@ -471,11 +665,11 @@ function executeFireShot(targetFormula, isRemote = false) {
     const vOriginX = VIRTUAL_WIDTH / 2;
     const vOriginY = VIRTUAL_HEIGHT / 2;
 
-	const dir = (p.x < VIRTUAL_WIDTH / 2) ? 1 : -1;
+    const dir = (p.x < VIRTUAL_WIDTH / 2) ? 1 : -1;
     const baseAngleRad = (p.angle || 0) * Math.PI / 180;
     
     const vx = Math.cos(baseAngleRad) * dir;
-    const vy = -Math.sin(baseAngleRad) * dir; 
+    const vy = -Math.sin(baseAngleRad); 
 
     let t = 0; 
     const step = 0.075;
@@ -490,33 +684,28 @@ function executeFireShot(targetFormula, isRemote = false) {
     disableControlsTemporarily();
     let shotPath = []; 
 
-    // 💡 弾が進んでいる間にプレイヤーに当たったかどうかを記憶するフラグ
-    let p1Hit = false;
-    let p2Hit = false;
-
-    // 💡 【移動】判定関数をスコープのエラーが出ないよう安全な位置に定義
     function checkShotResultAndEnd(finalX, finalY) {
-        // 両方当たった、または自分が当たった（自爆）
-        if ((currentPlayerIndex === 0 && p1Hit) || (currentPlayerIndex === 1 && p2Hit)) {
-            const loserName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
-            playImpactCinematic(finalX, finalY, () => { 
-                turnDisplay.innerText = `${loserName} SUICIDE!`; 
-                showResultMenu("GAME OVER", `${loserName} が自爆しました。`);
+        const team1Alive = checkTeamAlive(1);
+        const team2Alive = checkTeamAlive(2);
+
+        if (!team1Alive && !team2Alive) {
+            playImpactCinematic(finalX, finalY, () => {
+                turnDisplay.innerText = "DRAW GAME!";
+                showResultMenu("GAME OVER", "両プレイヤーのユニットが全滅しました！引き分けです。");
             });
-        } 
-        // 相手だけに当たった（クリーンヒット）
-        else if ((currentPlayerIndex === 0 && p2Hit) || (currentPlayerIndex === 1 && p1Hit)) {
-            const winnerName = p.name && !p.name.startsWith("PLAYER") ? p.name : activePlayerName;
-            playImpactCinematic(finalX, finalY, () => { 
-                turnDisplay.innerText = `${winnerName} WINS!!`; 
-                showResultMenu("GAME OVER", `${winnerName} の勝利です！`);
+        } else if (!team1Alive) {
+            playImpactCinematic(finalX, finalY, () => {
+                turnDisplay.innerText = "Player 2 WINS!!";
+                showResultMenu("GAME OVER", "Player 2 の勝利です！");
             });
-        } 
-        // 誰にも当たらなかった（ミス）
-        else {
+        } else if (!team2Alive) {
+            playImpactCinematic(finalX, finalY, () => {
+                turnDisplay.innerText = "Player 1 WINS!!";
+                showResultMenu("GAME OVER", "Player 1 の勝利です！");
+            });
+        } else {
             playImpactCinematic(finalX, finalY, () => { 
-                currentPlayerIndex = (currentPlayerIndex + 1) % 2; 
-                updateTurnDisplay(); 
+                switchTurn();
             });
         }
     }
@@ -537,16 +726,22 @@ function executeFireShot(targetFormula, isRemote = false) {
             shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
             ctx.stroke(); ctx.restore();
 
-            if (frame < duration) { 
-                requestAnimationFrame(zoomAnimation); 
-            } else {
-                setTimeout(() => {
-                    drawStage(); 
-                    onComplete(); 
-                    isAnimating = false; 
-                    updateTurnButtonState();
-                }, 400); 
-            }
+            // executeFireShot 関数の中にある playImpactCinematic 内の処理
+if (frame < duration) { 
+    requestAnimationFrame(zoomAnimation); 
+} else {
+    setTimeout(() => {
+        // ショット完了後にカメラ位置の記録を削除してリセットする
+        delete canvas.dataset.camX;
+        delete canvas.dataset.camY;
+
+        drawStage(); 
+        onComplete(); 
+        isAnimating = false; 
+        updateTurnButtonState();
+    }, 400); 
+}
+
         }
         zoomAnimation();
     }
@@ -578,12 +773,13 @@ function executeFireShot(targetFormula, isRemote = false) {
                 }
                 
                 const startX_Formula = (p.x - vOriginX) / 40;
-                const startY_Formula = calculate(startX_Formula);
-                
-                const yDisplacement = (worldY_Formula - startY_Formula) * 40;
-                finalCanvasY = baseY - yDisplacement;
+                const startY_Formula = (vOriginY - p.y) / 40;
+                const formulaAtStart = calculate(startX_Formula);
+                const offsetY = startY_Formula - formulaAtStart;
+                const currentMathY = worldY_Formula + offsetY;
+                finalCanvasY = vOriginY - (currentMathY * 40);
             }
-        } catch (e) { 
+        } catch (e) {
             errorDisplay.innerText = `[実行エラー]: ${e.message}`; 
             isAnimating = false; 
             updateTurnButtonState(); 
@@ -593,7 +789,6 @@ function executeFireShot(targetFormula, isRemote = false) {
         currentBulletX = finalCanvasX;
         currentBulletY = finalCanvasY;
         
-        // 数値エラー時のセーフティ
         if (isNaN(currentBulletX) || !isFinite(currentBulletX) || isNaN(currentBulletY) || !isFinite(currentBulletY)) {
             checkShotResultAndEnd(p.x, p.y);
             return;
@@ -619,37 +814,24 @@ function executeFireShot(targetFormula, isRemote = false) {
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#ff3366'; ctx.beginPath(); ctx.arc(currentBulletX, currentBulletY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-        // 💡【重複削除】ここに元々あった古い画面外判定のブロックを除去しました
+        // プレイヤーへのヒット判定
+        players.forEach((targetP, idx) => {
+            if (targetP.isAlive) {
+                if (targetP.id === p.id) return;
 
-        // 1. 相手プレイヤーとの当たり判定
-        const targetPlayerIndex = (currentPlayerIndex + 1) % 2; 
-        const target = players[targetPlayerIndex];
-        if (target.isAlive && Math.sqrt((currentBulletX - target.x)**2 + (currentBulletY - target.y)**2) < target.r + 2) {
-            // 💡 当たった瞬間にそのプレイヤーを死亡状態(非表示)にし、爆発エフェクトを出す
-            target.isAlive = false; 
-            explode(currentBulletX, currentBulletY, 20);
-            
-            if (targetPlayerIndex === 1) p2Hit = true;
-            if (targetPlayerIndex === 0) p1Hit = true;
-        }
-        
-        // 2. 自分自身（自爆）との当たり判定
-        if (t > 0.8 && p.isAlive && Math.sqrt((currentBulletX - p.x)**2 + (currentBulletY - p.y)**2) < p.r + 2) {
-            // 💡 当たった瞬間に自分を死亡状態(非表示)にし、爆発エフェクトを出す
-            p.isAlive = false;
-            explode(currentBulletX, currentBulletY, 20);
-            
-            if (currentPlayerIndex === 0) p1Hit = true;
-            if (currentPlayerIndex === 1) p2Hit = true;
-        }
+                const dist = Math.sqrt((currentBulletX - targetP.x)**2 + (currentBulletY - targetP.y)**2);
+                if (dist < targetP.r + 2) {
+                    targetP.isAlive = false;
+                    explode(currentBulletX, currentBulletY, 20);
+                }
+            }
+        });
 
-        // 3. 画面外に消えたときの最終着弾処理
         if (currentBulletX > VIRTUAL_WIDTH + 200 || currentBulletX < -200 || currentBulletY > VIRTUAL_HEIGHT * 2 || currentBulletY < -VIRTUAL_HEIGHT * 2) {
             checkShotResultAndEnd(currentBulletX, currentBulletY);
             return;
         }
         
-        // 4. 地形にぶつかったときの最終着弾処理
         if (isInTerrain(currentBulletX, currentBulletY)) {
             explode(currentBulletX, currentBulletY, 20);
             checkShotResultAndEnd(currentBulletX, currentBulletY);
@@ -665,25 +847,26 @@ function updateTurnDisplay() {
     if (myPlayerId === null || !isGameReady) return;
     if (disconnectTimer) return; 
     
-    const p1Name = players[0]?.name || "PLAYER 1";
-    const p2Name = players[1]?.name || "PLAYER 2";
+    let messageExtra = "";
+    if (pendingCommand !== null) {
+        const cmdText = `--${pendingCommand}`;
+        const actionName = (pendingCommand === 'reset') ? 'リセット' : '終了';
+        messageExtra = ` 【${actionName}要求中】${cmdText}で同意 / 式入力で拒否`;
+    }
+
+    const activeTeam = currentPlayerIndex + 1;
+    const teamLabel = getTeamName(activeTeam);
 
     if (isSinglePlayer) {
-        // 1人プレイ時：現在どちらのプレイヤーの順番かを表示
-        const activeName = (currentPlayerIndex === 0) ? p1Name : p2Name;
-        turnDisplay.innerText = `【${activeName}】のターンです`;
+        turnDisplay.innerText = `【${teamLabel}】のターンです！${messageExtra}`;
     } else {
-        // オンライン時 (既存ロジック)
-const myP = players[myPlayerId - 1];
-const isLeft = myP ? (myP.x < VIRTUAL_WIDTH / 2) : (myPlayerId === 1);
-const sideText = isLeft ? "左" : "右";
+        const isMyTurn = (currentPlayerIndex + 1 === myPlayerId);
+        let identityText = `【あなた: Player ${myPlayerId}】`;
 
-let identityText = `【あなた: ${myPlayerId === 1 ? p1Name : p2Name} (${sideText})】`;
-
-        if (currentPlayerIndex + 1 === myPlayerId) { 
-            turnDisplay.innerText = `${identityText} あなたのターンです！`; 
+        if (isMyTurn) { 
+            turnDisplay.innerText = `${identityText} あなたのターンです！(操作ユニットを選択可)${messageExtra}`; 
         } else { 
-            turnDisplay.innerText = `${identityText} 相手のターンを待っています...`; 
+            turnDisplay.innerText = `${identityText} 相手のターンを待っています...${messageExtra}`; 
         }
     }
 
@@ -695,10 +878,10 @@ function updateTurnButtonState() {
     const angleInput = document.getElementById('angleInput');
     const formulaInput = document.getElementById('formulaInput');
 
-    // 💡 1人プレイの時、またはオンラインで自分のターンの時にボタンを有効化
     const isMyTurn = isSinglePlayer || (myPlayerId === (currentPlayerIndex + 1));
+    const isTeamAlive = checkTeamAlive(currentPlayerIndex + 1);
 
-    if (!isAnimating && players[0].isAlive && players[1].isAlive && isMyTurn) {
+    if (!isAnimating && isTeamAlive && isMyTurn) {
         fireBtn.disabled = false; 
         fireBtn.style.opacity = "1.0"; 
         fireBtn.style.cursor = "pointer";
@@ -708,12 +891,10 @@ function updateTurnButtonState() {
         fireBtn.style.cursor = "not-allowed";
     }
 
-    // 角度入力に現在のターンの角度を反映させる（1人プレイ時のターン交代用）
-    if (angleInput && players[currentPlayerIndex]) {
-        angleInput.value = players[currentPlayerIndex].angle || 0;
-        angleInput.disabled = false;
-        angleInput.style.opacity = "1.0";
-        angleInput.style.cursor = "text";
+    if (angleInput) {
+        syncAngleInput();
+        angleInput.disabled = !isMyTurn;
+        angleInput.style.opacity = isMyTurn ? "1.0" : "0.5";
     }
 
     if (formulaInput) {
@@ -731,23 +912,22 @@ function updateTurnButtonState() {
 function initGame() {
     if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
     isAnimating = false; errorDisplay.innerText = "";
+    turnCount = 1;
+    lastSelectedPerTeam = { 1:null, 2:null };
+    pendingCommand = null;
+    commandProposerIndex = null;
 
-    // 💡 直書きされていた canvas.width 設定を resizeCanvas に任せる
     resizeCanvas();
 
     generateTerrain(); 
     placePlayers(); 
     
-    if(players[0]) players[0].name = (myPlayerId === 1) ? getMyName() : "PLAYER 1";
-    if(players[1]) players[1].name = (myPlayerId === 2) ? getMyName() : "PLAYER 2";
-
     const angleInput = document.getElementById('angleInput');
     if (angleInput) angleInput.value = "0";
     if (formulaInput) formulaInput.value = "";
     
     drawStage();
 }
-
 
 function createExplosionEffects(ex, ey) {
     for (let i = 0; i < 30; i++) {
@@ -766,14 +946,11 @@ function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
 
-    // スマホの高解像度倍率を取得（Retina対応）
     const dpr = window.devicePixelRatio || 1;
 
-    // Canvas内部の描画ドット数を倍率分拡大してクッキリさせる
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
 
-    // 画面上の見た目の表示サイズを指定
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
 
@@ -781,22 +958,19 @@ function resizeCanvas() {
     drawStage();
 }
 
-// 1. 改善された地形生成ロジック
 function generateTerrain() {
     terrainCircles = []; 
     destroyedCircles = [];
     
-    // 円の数を 10 〜 15 個のランダムにする
-    const targetCircles = Math.floor(10 + Math.random() * 6); // 10 〜 15
+    const targetCircles = Math.floor(10 + Math.random() * 6);
     
     let attempts = 0;
-    let leftCount = 0;  // 左側に生成された数
-    let rightCount = 0; // 右側に生成された数
+    let leftCount = 0;
+    let rightCount = 0;
 
     while (terrainCircles.length < targetCircles && attempts < 3000) {
         attempts++;
         
-        // 左右の極端な偏りを防ぐためのロジック（どちらかが4個未満なら、そちらを優先的に生成）
         let isLeft;
         if (leftCount < 4 && terrainCircles.length >= targetCircles - 4) {
             isLeft = true;
@@ -816,11 +990,9 @@ function generateTerrain() {
         const newCircle = {
             x: rx,
             y: Math.random() * VIRTUAL_HEIGHT, 
-            // 💡 円の大きさを少し大きく（半径 50 〜 110）
             r: 50 + Math.random() * 60 
         };
         
-        // 中央の禁止エリア（幅 約96px）
         if (newCircle.x > VIRTUAL_WIDTH * 0.46 && newCircle.x < VIRTUAL_WIDTH * 0.54) {
             continue;
         }
@@ -828,8 +1000,6 @@ function generateTerrain() {
         let tooClose = false;
         for (let c of terrainCircles) {
             const dist = Math.sqrt((newCircle.x - c.x)**2 + (newCircle.y - c.y)**2);
-            
-            // 💡 円が大きくなったので、中心同士の最低距離も 100px に調整
             const minCenterDistance = 100; 
             
             if (dist < minCenterDistance) { 
@@ -845,70 +1015,72 @@ function generateTerrain() {
     }
 }
 
-// 💡 2. プレイヤーの配置ロジック（埋まり防止・直線並び防止）
 function placePlayers() {
-    // プレイヤーの初期化
-    if(!players || players.length < 2) {
-        players = [
-            { id: 1, x: 0, y: 0, r: 8, isAlive: true, angle: 0, name: "PLAYER 1" },
-            { id: 2, x: 0, y: 0, r: 8, isAlive: true, angle: 0, name: "PLAYER 2" }
-        ];
-    } else {
-        players[0].isAlive = true;
-        players[1].isAlive = true;
+    players = [];
+    const countPerTeam = (gameMode === 'trio') ? 3 : 1;
+    const minPlayerDistance = 3 * 40; // 120px (3マス)
+
+    for (let team = 1; team <= 2; team++) {
+        for (let i = 0; i < countPerTeam; i++) {
+            players.push({
+                id: team,
+                unitIndex: i,
+                x: 0,
+                y: 0,
+                r: 8,
+                isAlive: true,
+                angle: 0,
+                name: `P${team}-${i + 1}`
+            });
+        }
     }
 
-    let placementAttempts = 0;
     let validPlacement = false;
+    let attempts = 0;
 
-    while (!validPlacement && placementAttempts < 1000) {
-        placementAttempts++;
+    while (!validPlacement && attempts < 10000) {
+        attempts++;
+        let p1IsLeft = Math.random() < 0.5;
 
-const p1IsLeft = Math.random() < 0.5;
-
-// ① プレイヤー1 の位置 (フラグによって左右を切替)
-const p1XMin = p1IsLeft ? 0.05 : 0.85;
-players[0].x = VIRTUAL_WIDTH * p1XMin + Math.random() * (VIRTUAL_WIDTH * 0.10);
-players[0].y = VIRTUAL_HEIGHT * 0.2 + Math.random() * (VIRTUAL_HEIGHT * 0.6);
-
-// ② プレイヤー2 の位置 (P1の反対側)
-const p2XMin = p1IsLeft ? 0.85 : 0.05;
-players[1].x = VIRTUAL_WIDTH * p2XMin + Math.random() * (VIRTUAL_WIDTH * 0.10);
-players[1].y = VIRTUAL_HEIGHT * 0.2 + Math.random() * (VIRTUAL_HEIGHT * 0.6);
-
-
-        // --- 判定1: プレイヤー同士が直線上に並んでいないか？ ---
-        // Y座標（高さ）の差が 120px 以上あることを保証する
-        const heightDifference = Math.abs(players[0].y - players[1].y);
-        if (heightDifference < 120) {
-            continue; // 高低差が足りなければ最初から決め直し
+        for (let p of players) {
+            let isLeft = (p.id === 1) ? p1IsLeft : !p1IsLeft;
+            let xMin = isLeft ? 0.05 : 0.65;
+            p.x = VIRTUAL_WIDTH * xMin + Math.random() * (VIRTUAL_WIDTH * 0.30);
+            p.y = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.70);
         }
 
-        // --- 判定2: プレイヤーが地形（円）に埋まっていないか？ ---
-        let p1IsBuried = false;
-        let p2IsBuried = false;
-
-        for (let c of terrainCircles) {
-            const distToP1 = Math.sqrt((players[0].x - c.x)**2 + (players[0].y - c.y)**2);
-            const distToP2 = Math.sqrt((players[1].x - c.x)**2 + (players[1].y - c.y)**2);
-
-            // プレイヤーの半径(15px) + 円の半径(c.r) + 余裕(15px)
-            // つまり、円の表面から 15px 以上離れていることを確認
-            if (distToP1 < (c.r + 30)) {
-                p1IsBuried = true;
+        // 1. プレイヤー同士の距離チェック (120px以上離す)
+        let tooClose = false;
+        for (let i = 0; i < players.length; i++) {
+            for (let j = i + 1; j < players.length; j++) {
+                let dist = Math.hypot(players[i].x - players[j].x, players[i].y - players[j].y);
+                if (dist < minPlayerDistance) {
+                    tooClose = true;
+                    break;
+                }
             }
-            if (distToP2 < (c.r + 30)) {
-                p2IsBuried = true;
+            if (tooClose) break;
+        }
+        if (tooClose) continue;
+
+        // 2. 地形判定（中心だけでなく、判定エリア全体で埋まりをチェック）
+        let buried = false;
+        for (let p of players) {
+            // プレイヤーの周り 25px の範囲に地形（円）があるかチェック
+            const safeRadius = p.r + 20; 
+            for (let c of terrainCircles) {
+                let dist = Math.hypot(p.x - c.x, p.y - c.y);
+                if (dist < (c.r + safeRadius)) {
+                    buried = true;
+                    break;
+                }
             }
+            if (buried) break;
         }
 
-        // どちらも埋まっておらず、高低差もバッチリなら確定！
-        if (!p1IsBuried && !p2IsBuried) {
-            validPlacement = true;
-        }
+        if (!buried) validPlacement = true;
     }
 }
-
 
 function isInTerrain(px, py) {
     const inAnyTerrain = terrainCircles.some(c => ((px - c.x)**2 + (py - c.y)**2) < c.r**2);
@@ -919,6 +1091,7 @@ function isInTerrain(px, py) {
 function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1) {
     if (!ctx) return;
     
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
@@ -930,21 +1103,39 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-    ctx.strokeStyle = '#999999'; 
-    ctx.lineWidth = 1;
-    
-    ctx.beginPath();
-    for (let x = originX; x < VIRTUAL_WIDTH + 2000; x += 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
-    for (let x = originX; x > -2000; x -= 40) { ctx.moveTo(x, -2000); ctx.lineTo(x, 4000); }
-    for (let y = originY; y < 4000; y += 40) { ctx.moveTo(-2000, y); ctx.lineTo(VIRTUAL_WIDTH + 2000, y); }
-    for (let y = originY; y > -2000; y -= 40) { ctx.moveTo(-2000, y); ctx.lineTo(VIRTUAL_WIDTH + 2000, y); }
-    ctx.stroke();
-
+// drawStage 内の目盛り文字を描画する箇所
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(-4000, originY); ctx.lineTo(6000, originY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(originX, -4000); ctx.lineTo(originX, 6000); ctx.stroke();
-    
+
+    // ズームの影響を受けない固定フォントサイズに設定
+    const baseFontSize = 20;
+    ctx.font = `bold ${baseFontSize}px "Comic Sans MS", "Chalkboard SE", "Arial Rounded MT Bold", sans-serif`;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.fillStyle = '#000000';
+
+    const xValues = [-15, -10, -5, 5, 10, 15];
+    ctx.textAlign = 'center';
+    xValues.forEach(val => {
+        const canvasX = originX + (val * 40);
+        const canvasY = originY - 10;
+        
+        ctx.strokeText(`${val}`, canvasX, canvasY);
+        ctx.fillText(`${val}`, canvasX, canvasY);
+    });
+
+    const yValues = [-15, -10, -5, 5, 10, 15];
+    ctx.textAlign = 'left';
+    yValues.forEach(val => {
+        const canvasX = originX + 10;
+        const canvasY = originY - (val * 40) + (baseFontSize / 3);
+        
+        ctx.strokeText(`${val}`, canvasX, canvasY);
+        ctx.fillText(`${val}`, canvasX, canvasY);
+    });
+
     ctx.restore(); 
 
     terrainCanvas.width = canvas.width;
@@ -975,45 +1166,41 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-    // drawStage 内の players.forEach 部分
-players.forEach(p => {
-    if (p.isAlive) {
-        let finalColor = '#333333'; 
-        if (myPlayerId === 1) { finalColor = (p.id === 1) ? '#0088cc' : '#e65100'; }
-        else if (myPlayerId === 2) { finalColor = (p.id === 2) ? '#e65100' : '#0088cc'; }
-        else { finalColor = (p.id === 1) ? '#0088cc' : '#e65100'; }
+    players.forEach((p, idx) => {
+        if (p.isAlive) {
+            let finalColor = (p.id === 1) ? '#0088cc' : '#e65100';
 
-        ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-        
-        if (players[currentPlayerIndex] && p.id === players[currentPlayerIndex].id) {
-            ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); ctx.stroke();
+            ctx.fillStyle = finalColor; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+            
+            if (idx === selectedPlayerIndex) {
+                ctx.strokeStyle = '#000000'; 
+                ctx.lineWidth = 3; 
+                ctx.beginPath(); 
+                ctx.arc(p.x, p.y, p.r + 5, 0, Math.PI * 2); 
+                ctx.stroke();
+            }
+
+            ctx.save();
+            ctx.font = 'bold 14px sans-serif';
+            ctx.textAlign = 'center';
+            
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.strokeText(p.name || `P${p.id}-${p.unitIndex + 1}`, p.x, p.y - 18);
+            
+            ctx.fillStyle = '#000000';
+            ctx.fillText(p.name || `P${p.id}-${p.unitIndex + 1}`, p.x, p.y - 18);
+            ctx.restore();
+
+            const rad = ((p.angle || 0) * Math.PI) / 180;
+            const dirX = (p.x < VIRTUAL_WIDTH / 2) ? 1 : -1;
+
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 2.5; ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30 * dirX);
+            ctx.stroke();
         }
-
-        // 💡 プレイヤー名の文字サイズ拡大＆白縁取り
-        ctx.save();
-        ctx.font = 'bold 16px sans-serif'; // 12px から 16px に変更
-        ctx.textAlign = 'center';
-        
-        // 白い縁取り（見やすさ向上）
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 3;
-        ctx.strokeText(p.name || `PLAYER ${p.id}`, p.x, p.y - 18);
-        
-        // 黒文字本体
-        ctx.fillStyle = '#000000';
-        ctx.fillText(p.name || `PLAYER ${p.id}`, p.x, p.y - 18);
-        ctx.restore();
-
-        const rad = ((p.angle || 0) * Math.PI) / 180;
-        const dirX = (p.x < VIRTUAL_WIDTH / 2) ? 1 : -1;
-
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; ctx.lineWidth = 2.5; ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(p.x + Math.cos(rad) * 30 * dirX, p.y - Math.sin(rad) * 30 * dirX);
-        ctx.stroke();
-    }
-});
-
+    });
 
     for (let i = explosionParticles.length - 1; i >= 0; i--) {
         let p = explosionParticles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.alpha -= 0.02; 
@@ -1051,16 +1238,14 @@ formulaInput.addEventListener('keydown', (e) => {
 
 document.body.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'angleInput') {
-        const targetIdx = isSinglePlayer ? currentPlayerIndex : (myPlayerId - 1);
-        const myCharacter = players[targetIdx];
-        if (myCharacter) { 
+        if (selectedPlayerIndex !== null && players[selectedPlayerIndex]) {
             const val = parseFloat(e.target.value) || 0;
-            myCharacter.angle = val;
+            players[selectedPlayerIndex].angle = val;
             drawStage();
             if (!isSinglePlayer && currentRoomCode) {
                 socket.emit('syncAngle', {
                     roomCode: currentRoomCode,
-                    playerIndex: targetIdx,
+                    playerIndex: selectedPlayerIndex,
                     angle: val,
                     senderName: getMyName()
                 });
@@ -1070,7 +1255,6 @@ document.body.addEventListener('input', (e) => {
 });
 
 window.addEventListener('resize', resizeCanvas);
-// ページ読み込み時の処理
 window.addEventListener('load', () => {
     detectDevice();
     resizeCanvas();
