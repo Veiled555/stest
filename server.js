@@ -68,6 +68,17 @@ socket.on('joinRoom', (roomCode, callback) => {
         socket.to(data.roomCode).emit('receiveFormula', data);
     });
 
+    // --- コマンドシステム用の Socket イベント ---
+    socket.on('sendCommand', (data) => {
+        // 部屋の相手にコマンド要求をそのまま転送
+        socket.to(data.roomCode).emit('receiveCommand', data);
+    });
+
+    socket.on('cancelCommand', (data) => {
+        // コマンド拒否（通常発射）があったことを相手に通知
+        socket.to(data.roomCode).emit('commandCancelled', data);
+    });
+
     // server.js 内の requestRematch 部分
 socket.on('requestRematch', (data) => {
     const room = rooms[data.roomCode];
@@ -83,7 +94,7 @@ socket.on('requestRematch', (data) => {
         room.rematchRequests = {}; // リセット
         
         // 初回と同じ startSyncProcess を送ることで、ホストがランダムな先攻を含めてステージを再生成・同期する
-        io.to(data.roomCode).emit('startSyncProcess');[span_8](start_span)[span_8](end_span)
+        io.to(data.roomCode).emit('startSyncProcess');
     }
 });
 
