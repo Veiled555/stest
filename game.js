@@ -20,8 +20,8 @@ let myPlayerId = null;
 let currentRoomCode = "";
 let isGameReady = false; 
 let isSinglePlayer = false;
-let gameMode = 'single'; // 'single' (1v1 Duels) or 'trio' (3v3 Squads)
-let selectedPlayerIndex = null; // 操作対象として選択中のプレイヤーインデックス
+let gameMode = 'single'; 
+let selectedPlayerIndex = null; 
 let lastSelectedPerTeam = { 1:null, 2:null };
 
 const VIRTUAL_WIDTH = 1200;
@@ -31,7 +31,7 @@ let scaleFactor = 1;
 let terrainCircles = [];    
 let destroyedCircles = [];  
 let players = [];           
-let currentPlayerIndex = 0; // 現在のターン側のチーム (0: Team 1, 1: Team 2)
+let currentPlayerIndex = 0; 
 let isAnimating = false;    
 let explosionParticles = [];
 
@@ -72,11 +72,15 @@ const modeSelectStep = document.getElementById('modeSelectStep');
 const inputStep = document.getElementById('inputStep');
 const roomInputGroup = document.getElementById('roomInputGroup');
 const joinButton = document.getElementById('joinButton');
+const singleNameGroup = document.getElementById('singleNameGroup');
+const multiNameGroup = document.getElementById('multiNameGroup');
 
 document.getElementById('singlePlayBtn').addEventListener('click', () => {
     isSinglePlayer = true;
     modeSelectStep.style.display = 'none';
     inputStep.style.display = 'block';
+    singleNameGroup.style.display = 'block';
+    multiNameGroup.style.display = 'none';
     roomInputGroup.style.display = 'none';
     joinButton.innerText = "1人で遊ぶ (スタート)";
 });
@@ -85,6 +89,8 @@ document.getElementById('multiPlayBtn').addEventListener('click', () => {
     isSinglePlayer = false;
     modeSelectStep.style.display = 'none';
     inputStep.style.display = 'block';
+    singleNameGroup.style.display = 'none';
+    multiNameGroup.style.display = 'block';
     roomInputGroup.style.display = 'block';
     joinButton.innerText = "対戦部屋に入る";
 });
@@ -106,9 +112,11 @@ joinButton.addEventListener('click', () => {
         myPlayerId = 1;
         initGame();
         
-        const pName = getMyName();
+        const p1Name = getSinglePlayerName(1);
+        const p2Name = getSinglePlayerName(2);
+        
         players.forEach(p => {
-            p.name = `${pName} (${p.id === 1 ? 'T1' : 'T2'}-${p.unitIndex + 1})`;
+            p.name = (p.id === 1) ? p1Name : p2Name;
         });
 
         isGameReady = true;
@@ -152,12 +160,21 @@ cancelWaitBtn.addEventListener('click', () => {
     inputStep.style.display = 'block';
 });
 
+function getSinglePlayerName(teamId) {
+    const inputId = teamId === 1 ? 'p1NameInput' : 'p2NameInput';
+    const nameInput = document.getElementById(inputId);
+    if (nameInput && nameInput.value.trim() !== "") {
+        return nameInput.value.trim();
+    }
+    return `Player ${teamId}`;
+}
+
 function getMyName() {
     const nameInput = document.getElementById('playerNameInput');
     if (nameInput && nameInput.value.trim() !== "") {
         return nameInput.value.trim();
     }
-    return myPlayerId ? `Player${myPlayerId}` : "Player";
+    return myPlayerId ? `Player ${myPlayerId}` : "Player";
 }
 
 socket.on('connect', () => {
@@ -196,7 +213,7 @@ socket.on('startSyncProcess', () => {
 
         const myName = getMyName();
         players.forEach(p => {
-            if (p.id === 1) p.name = `${myName}-${p.unitIndex + 1}`;
+            if (p.id === 1) p.name = myName;
         });
 
         socket.emit('syncTerrain', {
@@ -215,7 +232,7 @@ socket.on('roomError', (msg) => {
 socket.on('receiveTerrain', (data) => {
     terrainCircles = data.terrain;
     players = data.players;
-    destroyedCircles = []; // 破壊データを確実にリセット
+    destroyedCircles = [];
 
     if (data && typeof data.startingPlayerIndex === 'number') {
         currentPlayerIndex = data.startingPlayerIndex;
@@ -226,7 +243,7 @@ socket.on('receiveTerrain', (data) => {
     const myName = getMyName();
     if (myPlayerId === 2) {
         players.forEach(p => {
-            if (p.id === 2) p.name = `${myName}-${p.unitIndex + 1}`;
+            if (p.id === 2) p.name = myName;
         });
     }
 
@@ -255,7 +272,12 @@ socket.on('receiveFormula', (data) => {
 
     if (remoteShooterIndex !== null && players[remoteShooterIndex]) {
         selectedPlayerIndex = remoteShooterIndex;
-        if (senderName) players[remoteShooterIndex].name = senderName;
+        if (senderName) {
+            const remoteTeamId = players[remoteShooterIndex].id;
+            players.forEach(p => {
+                if (p.id === remoteTeamId) p.name = senderName;
+            });
+        }
     }
     
     executeFireShot(formula, true); 
@@ -314,7 +336,10 @@ socket.on('receiveAngleSync', (data) => {
     if (players[data.playerIndex]) {
         players[data.playerIndex].angle = data.angle;
         if (data.senderName) {
-            players[data.playerIndex].name = data.senderName;
+            const senderTeamId = players[data.playerIndex].id;
+            players.forEach(p => {
+                if (p.id === senderTeamId) p.name = data.senderName;
+            });
         }
         drawStage();
     }
@@ -323,9 +348,10 @@ socket.on('receiveAngleSync', (data) => {
 document.getElementById('rematchButton').addEventListener('click', () => {
     if (isSinglePlayer) {
         initGame();
-        const pName = getMyName();
+        const p1Name = getSinglePlayerName(1);
+        const p2Name = getSinglePlayerName(2);
         players.forEach(p => {
-            p.name = `${pName} (${p.id === 1 ? 'T1' : 'T2'}-${p.unitIndex + 1})`;
+            p.name = (p.id === 1) ? p1Name : p2Name;
         });
         isGameReady = true;
         document.getElementById('resultModal').style.display = 'none';
@@ -358,18 +384,14 @@ function disableControlsTemporarily() {
 
 function autoSelectActivePlayer() {
     const currentTeam = currentPlayerIndex + 1;
-    
-    // 【修正】まず直前までそのチームが選択していたインデックスを取得
     let targetIndex = lastSelectedPerTeam[currentTeam];
 
-    // 直前の選択が有効（生存中かつ同じチーム）ならそれを維持
     if (targetIndex !== null && players[targetIndex] && players[targetIndex].id === currentTeam && players[targetIndex].isAlive) {
         selectedPlayerIndex = targetIndex;
         syncAngleInput();
         return;
     }
 
-    // 保持されていた選択が無効な場合は、チームの先頭の生存ユニットを自動選択
     const foundIndex = players.findIndex(p => p.id === currentTeam && p.isAlive);
     selectedPlayerIndex = (foundIndex !== -1) ? foundIndex : null;
     lastSelectedPerTeam[currentTeam] = selectedPlayerIndex;
@@ -393,9 +415,9 @@ function switchTurn() {
 }
 
 function getTeamName(teamId) {
-    if (teamId === 1) return "Player 1";
-    if (teamId === 2) return "Player 2";
-    return "Player";
+    const p = players.find(player => player.id === teamId);
+    if (p && p.name) return p.name;
+    return `Player ${teamId}`;
 }
 
 function checkTeamAlive(teamId) {
@@ -409,31 +431,25 @@ function countTeamAlive(teamId) {
 canvas.addEventListener('click', (e) => {
     if (!isGameReady || isAnimating) return;
 
-    // 現在のターンになっているチーム ID (1 または 2)
     const activeTeam = currentPlayerIndex + 1;
 
-    // オンラインで自分のターンではない場合はクリック無効
     if (!isSinglePlayer && myPlayerId !== activeTeam) return;
 
     const rect = canvas.getBoundingClientRect();
     const clickX = (e.clientX - rect.left) * (canvas.width / rect.width);
     const clickY = (e.clientY - rect.top) * (canvas.height / rect.height);
 
-    // 描画基準(通常時は常に画面中央)と一致させる
     const camX = VIRTUAL_WIDTH / 2;
     const camY = VIRTUAL_HEIGHT / 2;
 
     const worldClickX = (clickX - canvas.width / 2) / scaleFactor + camX;
     const worldClickY = (clickY - canvas.height / 2) / scaleFactor + camY;
 
-    // 現在のターンのチームの生きているプレイヤーのみ選択可能にする
     players.forEach((p, idx) => {
         if (p.id === activeTeam && p.isAlive) {
             const dist = Math.sqrt((worldClickX - p.x)**2 + (worldClickY - p.y)**2);
-            // 当たり判定領域
             if (dist < p.r + 30) {
                 selectedPlayerIndex = idx;
-                // 【追加】手動で選択した際もチームの選択状態を記録
                 lastSelectedPerTeam[activeTeam] = idx;
                 syncAngleInput();
                 drawStage();
@@ -529,10 +545,12 @@ function handleCommandInput(cmdStr) {
     }
 
     if (cmdStr === '--reset') {
-        if (turnCount > 2) {
+/*
+        if (turnCount > 1) {
             errorDisplay.innerText = "--reset はゲーム開始後の1ターン目のみ使用可能です。";
             return;
         }
+*/
 
         executeOrProposeCommand('--reset', 'reset');
         return;
@@ -568,6 +586,11 @@ function executeOrProposeCommand(fullCmd, cmdKey) {
         if (cmdKey === 'reset') {
             if (isSinglePlayer) {
                 initGame();
+                const p1Name = getSinglePlayerName(1);
+                const p2Name = getSinglePlayerName(2);
+                players.forEach(p => {
+                    p.name = (p.id === 1) ? p1Name : p2Name;
+                });
                 autoSelectActivePlayer();
                 updateTurnDisplay();
                 updateTurnButtonState();
@@ -584,9 +607,11 @@ function executeOrProposeCommand(fullCmd, cmdKey) {
         } else if (cmdKey === 'end') {
             const team1Count = countTeamAlive(1);
             const team2Count = countTeamAlive(2);
-            let endMsg = `合意により終了しました。(Player1: ${team1Count}体 / Player2: ${team2Count}体)`;
-            if (team1Count > team2Count) endMsg += " → Player 1 の勝利！";
-            else if (team2Count > team1Count) endMsg += " → Player 2 の勝利！";
+            const team1Name = getTeamName(1);
+            const team2Name = getTeamName(2);
+            let endMsg = `合意により終了しました。(${team1Name}: ${team1Count}体 / ${team2Name}: ${team2Count}体)`;
+            if (team1Count > team2Count) endMsg += ` → ${team1Name} の勝利！`;
+            else if (team2Count > team1Count) endMsg += ` → ${team2Name} の勝利！`;
             else endMsg += " → 引き分け！";
 
             showResultMenu("GAME OVER", endMsg);
@@ -643,7 +668,7 @@ function executeFireShot(targetFormula, isRemote = false) {
     const p = players[selectedPlayerIndex];
     if (!p) return;
     
-    const activePlayerName = p.name || `P${p.id}-${p.unitIndex + 1}`;
+    const activePlayerName = p.name || `Player ${p.id}`;
     addFormulaLog(activePlayerName, targetFormula);
 
     let calculate;
@@ -687,6 +712,8 @@ function executeFireShot(targetFormula, isRemote = false) {
     function checkShotResultAndEnd(finalX, finalY) {
         const team1Alive = checkTeamAlive(1);
         const team2Alive = checkTeamAlive(2);
+        const team1Name = getTeamName(1);
+        const team2Name = getTeamName(2);
 
         if (!team1Alive && !team2Alive) {
             playImpactCinematic(finalX, finalY, () => {
@@ -695,13 +722,13 @@ function executeFireShot(targetFormula, isRemote = false) {
             });
         } else if (!team1Alive) {
             playImpactCinematic(finalX, finalY, () => {
-                turnDisplay.innerText = "Player 2 WINS!!";
-                showResultMenu("GAME OVER", "Player 2 の勝利です！");
+                turnDisplay.innerText = `${team2Name} WINS!!`;
+                showResultMenu("GAME OVER", `${team2Name} の勝利です！`);
             });
         } else if (!team2Alive) {
             playImpactCinematic(finalX, finalY, () => {
-                turnDisplay.innerText = "Player 1 WINS!!";
-                showResultMenu("GAME OVER", "Player 1 の勝利です！");
+                turnDisplay.innerText = `${team1Name} WINS!!`;
+                showResultMenu("GAME OVER", `${team1Name} の勝利です！`);
             });
         } else {
             playImpactCinematic(finalX, finalY, () => { 
@@ -726,22 +753,19 @@ function executeFireShot(targetFormula, isRemote = false) {
             shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
             ctx.stroke(); ctx.restore();
 
-            // executeFireShot 関数の中にある playImpactCinematic 内の処理
-if (frame < duration) { 
-    requestAnimationFrame(zoomAnimation); 
-} else {
-    setTimeout(() => {
-        // ショット完了後にカメラ位置の記録を削除してリセットする
-        delete canvas.dataset.camX;
-        delete canvas.dataset.camY;
+            if (frame < duration) { 
+                requestAnimationFrame(zoomAnimation); 
+            } else {
+                setTimeout(() => {
+                    delete canvas.dataset.camX;
+                    delete canvas.dataset.camY;
 
-        drawStage(); 
-        onComplete(); 
-        isAnimating = false; 
-        updateTurnButtonState();
-    }, 400); 
-}
-
+                    drawStage(); 
+                    onComplete(); 
+                    isAnimating = false; 
+                    updateTurnButtonState();
+                }, 400); 
+            }
         }
         zoomAnimation();
     }
@@ -814,7 +838,6 @@ if (frame < duration) {
         shotPath.forEach((pt, idx) => { if (idx === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y); });
         ctx.stroke(); ctx.fillStyle = '#ff3366'; ctx.beginPath(); ctx.arc(currentBulletX, currentBulletY, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 
-        // プレイヤーへのヒット判定
         players.forEach((targetP, idx) => {
             if (targetP.isAlive) {
                 if (targetP.id === p.id) return;
@@ -861,7 +884,7 @@ function updateTurnDisplay() {
         turnDisplay.innerText = `【${teamLabel}】のターンです！${messageExtra}`;
     } else {
         const isMyTurn = (currentPlayerIndex + 1 === myPlayerId);
-        let identityText = `【あなた: Player ${myPlayerId}】`;
+        let identityText = `【あなた: ${getTeamName(myPlayerId)}】`;
 
         if (isMyTurn) { 
             turnDisplay.innerText = `${identityText} あなたのターンです！(操作ユニットを選択可)${messageExtra}`; 
@@ -1018,7 +1041,7 @@ function generateTerrain() {
 function placePlayers() {
     players = [];
     const countPerTeam = (gameMode === 'trio') ? 3 : 1;
-    const minPlayerDistance = 3 * 40; // 120px (3マス)
+    const minPlayerDistance = 3 * 40; 
 
     for (let team = 1; team <= 2; team++) {
         for (let i = 0; i < countPerTeam; i++) {
@@ -1030,7 +1053,7 @@ function placePlayers() {
                 r: 8,
                 isAlive: true,
                 angle: 0,
-                name: `P${team}-${i + 1}`
+                name: `Player ${team}`
             });
         }
     }
@@ -1049,7 +1072,6 @@ function placePlayers() {
             p.y = VIRTUAL_HEIGHT * 0.15 + Math.random() * (VIRTUAL_HEIGHT * 0.70);
         }
 
-        // 1. プレイヤー同士の距離チェック (120px以上離す)
         let tooClose = false;
         for (let i = 0; i < players.length; i++) {
             for (let j = i + 1; j < players.length; j++) {
@@ -1063,10 +1085,8 @@ function placePlayers() {
         }
         if (tooClose) continue;
 
-        // 2. 地形判定（中心だけでなく、判定エリア全体で埋まりをチェック）
         let buried = false;
         for (let p of players) {
-            // プレイヤーの周り 25px の範囲に地形（円）があるかチェック
             const safeRadius = p.r + 20; 
             for (let c of terrainCircles) {
                 let dist = Math.hypot(p.x - c.x, p.y - c.y);
@@ -1103,13 +1123,11 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
     ctx.scale(scaleFactor * zoom, scaleFactor * zoom); 
     ctx.translate(-camX, -camY);
 
-// drawStage 内の目盛り文字を描画する箇所
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(-4000, originY); ctx.lineTo(6000, originY); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(originX, -4000); ctx.lineTo(originX, 6000); ctx.stroke();
 
-    // ズームの影響を受けない固定フォントサイズに設定
     const baseFontSize = 20;
     ctx.font = `bold ${baseFontSize}px "Comic Sans MS", "Chalkboard SE", "Arial Rounded MT Bold", sans-serif`;
     ctx.strokeStyle = '#ffffff';
@@ -1186,10 +1204,10 @@ function drawStage(camX = VIRTUAL_WIDTH / 2, camY = VIRTUAL_HEIGHT / 2, zoom = 1
             
             ctx.strokeStyle = '#ffffff';
             ctx.lineWidth = 3;
-            ctx.strokeText(p.name || `P${p.id}-${p.unitIndex + 1}`, p.x, p.y - 18);
+            ctx.strokeText(p.name || `Player ${p.id}`, p.x, p.y - 18);
             
             ctx.fillStyle = '#000000';
-            ctx.fillText(p.name || `P${p.id}-${p.unitIndex + 1}`, p.x, p.y - 18);
+            ctx.fillText(p.name || `Player ${p.id}`, p.x, p.y - 18);
             ctx.restore();
 
             const rad = ((p.angle || 0) * Math.PI) / 180;
