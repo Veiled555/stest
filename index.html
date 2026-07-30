@@ -8,7 +8,6 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
-<!-- <div id="debugLog"> </div> -->
 <div id="lobbyModal" class="modal-layer">
     <div class="lobby-box">
         <h2>Graphwar</h2>
@@ -20,18 +19,25 @@
         </div>
 
         <div id="inputStep" style="display: none;">
-            <div style="margin-bottom: 10px; text-align: left;">
-                <label style="color: #ccc; font-size: 14px;">プレイヤー名:</label>
-                <input type="text" id="playerNameInput" placeholder="プレイヤー名" style="margin-top: 5px; margin-bottom: 10px;">
+            <div id="singleNameGroup" style="display: none; margin-bottom: 10px; text-align: left;">
+                <label style="color: #ccc; font-size: 14px;">自分 (Player 1) の名前:</label>
+                <input type="text" id="p1NameInput" placeholder="Player 1" style="margin-top: 5px; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px;">相手 (Player 2) の名前:</label>
+                <input type="text" id="p2NameInput" placeholder="Player 2" style="margin-top: 5px; margin-bottom: 10px;">
             </div>
 
-<div style="margin-bottom: 10px; text-align: left;">
-    <label style="color: #ccc; font-size: 14px;">ゲームモード:</label>
-    <select id="gameModeSelect" style="width: 100%; padding: 10px; background: #111; border: 1px solid #555; color: #fff; font-size: 16px; border-radius: 4px; margin-top: 5px; text-align: center; text-align-last: center;">
-        <option value="single" style="text-align: center;">1 v 1 (Duels)</option>
-        <option value="trio" style="text-align: center;">3 v 3 (Squads)</option>
-    </select>
-</div>
+            <div id="multiNameGroup" style="display: none; margin-bottom: 10px; text-align: left;">
+                <label style="color: #ccc; font-size: 14px;">プレイヤー名:</label>
+                <input type="text" id="playerNameInput" placeholder="Player" style="margin-top: 5px; margin-bottom: 10px;">
+            </div>
+
+            <div style="margin-bottom: 10px; text-align: left;">
+                <label style="color: #ccc; font-size: 14px;">ゲームモード:</label>
+                <select id="gameModeSelect" style="width: 100%; padding: 10px; background: #111; border: 1px solid #555; color: #fff; font-size: 16px; border-radius: 4px; margin-top: 5px; text-align: center; text-align-last: center;">
+                    <option value="single" style="text-align: center;">1 v 1 (Duels)</option>
+                    <option value="trio" style="text-align: center;">3 v 3 (Squads)</option>
+                </select>
+            </div>
             
             <div id="roomInputGroup">
                 <p>「合言葉」を入力してください</p>
@@ -41,39 +47,37 @@
             <button id="joinButton">ゲームを開始する</button>
             <button id="backToModeBtn" style="margin-top: 10px; background: #444;">戻る</button>
         </div>
-<div id="waitingStep" style="display: none;">
-    <p id="waitingStatusText" style="margin-bottom: 20px;">対戦相手を探しています...</p>
-    
-    <div class="spinner-container">
-        <svg class="loading-spinner" viewBox="0 0 50 50">
-            <circle class="spinner-path" cx="25" cy="25" r="20" fill="none" stroke-width="4"></circle>
-        </svg>
-    </div>
 
-    <button id="cancelWaitBtn" style="background: #a93226; margin-top: 20px;">対戦をキャンセル</button>
-</div>
+        <div id="waitingStep" style="display: none;">
+            <p id="waitingStatusText" style="margin-bottom: 20px;">対戦相手を探しています...</p>
+            
+            <div class="spinner-container">
+                <svg class="loading-spinner" viewBox="0 0 50 50">
+                    <circle class="spinner-path" cx="25" cy="25" r="20" fill="none" stroke-width="4"></circle>
+                </svg>
+            </div>
 
-    </div>
-</div>
-
-
-    <div id="resultModal" class="modal-layer" style="display: none;">
-        <div class="lobby-box">
-            <h2 id="resultTitle">GAME OVER</h2>
-            <p id="resultMessage">対戦が終了しました</p>
-            <button id="rematchButton" style="margin-bottom: 10px; background: #4a7c59;">もう一度対戦（再戦）</button>
-            <button id="leaveButton" style="background: #444;">最初の画面へ戻る</button>
+            <button id="cancelWaitBtn" style="background: #a93226; margin-top: 20px;">対戦をキャンセル</button>
         </div>
     </div>
+</div>
 
-    <div id="game">
-        <div id="controlBar">
-            <div class="bar-row">
-                <div id="turnDisplay">接続中...</div>
-                <div id="errorDisplay"></div>
-            </div>
-            
+<div id="resultModal" class="modal-layer" style="display: none;">
+    <div class="lobby-box">
+        <h2 id="resultTitle">GAME OVER</h2>
+        <p id="resultMessage">対戦が終了しました</p>
+        <button id="rematchButton" style="margin-bottom: 10px; background: #4a7c59;">もう一度対戦（再戦）</button>
+        <button id="leaveButton" style="background: #444;">最初の画面へ戻る</button>
+    </div>
+</div>
 
+<div id="game">
+    <div id="controlBar">
+        <div class="bar-row">
+            <div id="turnDisplay">接続中...</div>
+            <div id="errorDisplay"></div>
+        </div>
+        
         <div class="bar-row inputs-column">
             <div class="formula-box">
                 <span class="prefix">f(x) =</span>
@@ -91,25 +95,24 @@
             </div>
         </div>
 
-            <div id="buttons">
-                <button class="key formula-preset" data-formula="1 * abs(x - 10)">絶対値関数</button>
-                <button class="key formula-preset" data-formula="6 * sin(3 * (x - 10)) / (3 * (x - 10))">シンク関数</button>
-                <button class="key formula-preset" data-formula="5 * sin(x / 3) / (1 + exp(2 * (x - 15)))">フィルター関数</button>
-                <button class="key formula-preset" data-formula="3 / (1 + (exp(-69 * (x + 2))))">シグモイド(型)</button>
-                <button class="key formula-preset" data-formula="ln(abs(x))">対数(ln)</button>
-                <button class="key formula-preset" data-formula="log(abs(x))">常用対数(log)</button>
-                <button class="key formula-preset" data-formula="sqrt(abs(x))">平方根(sqrt)</button>
-                <button class="key formula-preset" data-formula="tan(x / 10)">正接(tan)</button>
-                <button class="key formula-preset" data-formula="((x - 3)^2) / 20">二次関数(放物線)</button>
-                <button class="key formula-preset" data-formula="y' = 1.2^x">指数微分(y')</button>
-                <button class="key formula-preset" data-formula="y'' = (1.2^(-(x+3)^2))*(20*(-y))">微分方程式(y'')</button>
-            </div>
+        <div id="buttons">
+            <button class="key formula-preset" data-formula="1 * abs(x - 10)">絶対値関数</button>
+            <button class="key formula-preset" data-formula="6 * sin(3 * (x - 10)) / (3 * (x - 10))">シンク関数</button>
+            <button class="key formula-preset" data-formula="5 * sin(x / 3) / (1 + exp(2 * (x - 15)))">フィルター関数</button>
+            <button class="key formula-preset" data-formula="3 / (1 + (exp(-69 * (x + 2))))">シグモイド(型)</button>
+            <button class="key formula-preset" data-formula="ln(abs(x))">対数(ln)</button>
+            <button class="key formula-preset" data-formula="log(abs(x))">常用対数(log)</button>
+            <button class="key formula-preset" data-formula="sqrt(abs(x))">平方根(sqrt)</button>
+            <button class="key formula-preset" data-formula="tan(x / 10)">正接(tan)</button>
+            <button class="key formula-preset" data-formula="((x - 3)^2) / 20">二次関数(放物線)</button>
+            <button class="key formula-preset" data-formula="y' = 1.2^x">指数微分(y')</button>
+            <button class="key formula-preset" data-formula="y'' = (1.2^(-(x+3)^2))*(20*(-y))">微分方程式(y'')</button>
         </div>
-
-        <canvas id="gameCanvas"></canvas>
     </div>
 
-    <script src="game.js"></script>
+    <canvas id="gameCanvas"></canvas>
+</div>
 
-    </body>
+<script src="game.js"></script>
+</body>
 </html>
