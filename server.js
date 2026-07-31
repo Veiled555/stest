@@ -79,58 +79,55 @@ socket.on('joinRoom', (roomCode, callback) => {
         socket.to(data.roomCode).emit('commandCancelled', data);
     });
 
-    // server.js 内の requestRematch 部分
+// server.js の requestRematch イベント部分
 socket.on('requestRematch', (data) => {
     const room = rooms[data.roomCode];
     if (!room) return;
 
+    if (!room.rematchRequests) {
+        room.rematchRequests = {};
+    }
+
     room.rematchRequests[data.myPlayerId] = true;
     
-    // 相手に「再戦したがってるよ」と通知
+    // 相手に「再戦を待っている」旨を通知
     socket.to(data.roomCode).emit('opponentWantsRematch');
 
-    // 💡 2人とも再戦ボタンを押した場合
+    // ★ 2人とも再戦ボタンを押した場合のみゲームを再開
     if (room.rematchRequests[1] && room.rematchRequests[2]) {
         room.rematchRequests = {}; // リセット
         
-        // 初回と同じ startSyncProcess を送ることで、ホストがランダムな先攻を含めてステージを再生成・同期する
+        // 両者へ同期開始（ゲームリセット）イベントを送信
         io.to(data.roomCode).emit('startSyncProcess');
     }
 });
 
-
+// 部屋退室時や切断時に再戦リクエストの状態もクリアする処理を追加
 socket.on('leaveRoom', ({ roomCode }) => {
     socket.leave(roomCode);
     
     const room = rooms[roomCode];
     if (room) {
-        // 1. 部屋の players 配列から退室したユーザーの ID を確実に除去
         room.players = room.players.filter(id => id !== socket.id);
-        
-        // 2. もし退室したのがホスト（1人目）だった場合、ホストIDを更新するか部屋をリセットする
+        if (room.rematchRequests) room.rematchRequests = {}; // リセット
+
         if (room.hostId === socket.id) {
             if (room.players.length > 0) {
-                // まだ誰か残っていればその人を新しいホストにする
                 room.hostId = room.players[0];
             } else {
-                // 誰もいなくなったら部屋データを完全に削除！
                 delete rooms[roomCode];
-                console.log(`🧹 部屋「${roomCode}」は空になったため削除されました。`);
                 return;
             }
         }
 
-        // 3. 誰もいなくなった場合の安全策（念のため）
         if (room.players.length === 0) {
             delete rooms[roomCode];
-            console.log(`🧹 部屋「${roomCode}」は空になったため削除されました。`);
         } else {
-            // 残ったプレイヤーに相手が退出したことを通知
             socket.to(roomCode).emit('playerLeft');
         }
     }
 });
-    // 💡 改善①：だれかが切断したときの処理
+    //
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
         for (const roomCode in rooms) {
