@@ -196,6 +196,7 @@ socket.on('roomJoined', (data) => {
     }
 });
 
+// startSyncProcess 内で自分の名前を維持・同期するように修正
 socket.on('startSyncProcess', () => {
     if (disconnectTimer) {
         clearTimeout(disconnectTimer);
@@ -210,7 +211,6 @@ socket.on('startSyncProcess', () => {
         initGame(); 
         const firstIndex = Math.floor(Math.random() * 2);
         currentPlayerIndex = firstIndex;
-
         const myName = getMyName();
         players.forEach(p => {
             if (p.id === 1) p.name = myName;
@@ -241,11 +241,9 @@ socket.on('receiveTerrain', (data) => {
     }
 
     const myName = getMyName();
-    if (myPlayerId === 2) {
-        players.forEach(p => {
-            if (p.id === 2) p.name = myName;
-        });
-    }
+    players.forEach(p => {
+        if (p.id === myPlayerId) p.name = myName;
+    });
 
     isGameReady = true; 
     isAnimating = false; 
@@ -264,6 +262,25 @@ socket.on('receiveTerrain', (data) => {
     updateTurnButtonState();
     drawStage();
 });
+
+// 相手が再戦を押した時の処理
+socket.on('opponentWantsRematch', () => {
+    // リザルト画面内のメッセージを直接更新
+    const resultMsg = document.getElementById('resultMessage');
+    if (resultMsg) {
+        resultMsg.innerText = "相手が再戦を希望しています！";
+        resultMsg.style.color = "#ffdd57"; // 目立つように黄色に変更
+        resultMsg.style.fontWeight = "bold";
+    }
+
+    // もし自分がまだ再戦ボタンを押していなければ、ボタンの表示も変えてアピール
+    const rematchBtn = document.getElementById('rematchButton');
+    if (rematchBtn && !rematchBtn.disabled) {
+        rematchBtn.innerText = "相手が再戦希望中！ (タップして再戦)";
+        rematchBtn.style.background = "#27ae60"; // 緑色を強調
+    }
+});
+
 
 socket.on('receiveFormula', (data) => {
     const formula = (data && data.formula) ? data.formula : data;
@@ -285,16 +302,51 @@ socket.on('receiveFormula', (data) => {
 
 socket.on('receiveCommand', (data) => {
     const { command, senderIndex } = data;
-    
+    const cmdKey = command.replace('--', '');
+
     if (command === '--skip') {
         addFormulaLog(getTeamName(senderIndex + 1), '--skip');
         switchTurn();
     } else if (command === '--reset' || command === '--end') {
-        addFormulaLog(getTeamName(senderIndex + 1), command);
-        pendingCommand = command.replace('--', '');
-        commandProposerIndex = senderIndex;
-        
-        switchTurn();
+        // ★ 自分がすでに提案済みで、相手が同じコマンドで応答してきた場合（合意成立）
+        if (pendingCommand === cmdKey && commandProposerIndex !== senderIndex) {
+            const nameToLog = getTeamName(senderIndex + 1);
+            addFormulaLog(nameToLog, command);
+
+            pendingCommand = null;
+            commandProposerIndex = null;
+
+            if (cmdKey === 'reset') {
+                if (myPlayerId === 1) {
+                    initGame();
+                    currentPlayerIndex = Math.floor(Math.random() * 2);
+                    socket.emit('syncTerrain', {
+                        roomCode: currentRoomCode,
+                        terrain: terrainCircles,
+                        players: players,
+                        startingPlayerIndex: currentPlayerIndex
+                    });
+                }
+            } else if (cmdKey === 'end') {
+                const team1Count = countTeamAlive(1);
+                const team2Count = countTeamAlive(2);
+                const team1Name = getTeamName(1);
+                const team2Name = getTeamName(2);
+                let endMsg = `合意により終了しました。(${team1Name}: ${team1Count}体 / ${team2Name}: ${team2Count}体)`;
+                if (team1Count > team2Count) endMsg += ` → ${team1Name} の勝利！`;
+                else if (team2Count > team1Count) endMsg += ` → ${team2Name} の勝利！`;
+                else endMsg += " → 引き分け！";
+
+                showResultMenu("GAME OVER", endMsg);
+            }
+        } 
+        // ★ 相手から新たに提案が届いた場合
+        else {
+            addFormulaLog(getTeamName(senderIndex + 1), command);
+            pendingCommand = cmdKey;
+            commandProposerIndex = senderIndex;
+            switchTurn();
+        }
     }
 });
 
@@ -316,20 +368,6 @@ socket.on('opponentDisconnected', () => {
         showResultMenu("対戦中断", "相手の通信が1分以上途絶えたため、ゲームを終了しました。");
         isGameReady = false;
     }, DISCONNECT_TIMEOUT);
-});
-
-socket.on('opponentWantsRematch', () => {
-    if (myPlayerId === 1) {
-        initGame();
-        currentPlayerIndex = Math.floor(Math.random() * 2);
-
-        socket.emit('syncTerrain', {
-            roomCode: currentRoomCode,
-            terrain: terrainCircles,
-            players: players,
-            startingPlayerIndex: currentPlayerIndex
-        });
-    }
 });
 
 socket.on('receiveAngleSync', (data) => {
@@ -360,8 +398,21 @@ document.getElementById('rematchButton').addEventListener('click', () => {
         updateTurnButtonState();
     } else {
         socket.emit('requestRematch', { roomCode: currentRoomCode, myPlayerId: myPlayerId });
-        turnDisplay.innerText = "対戦相手の再戦同意を待っています...";
-        disableControlsTemporarily();
+        
+        // リザルト画面内で待機状態であることを明示
+        const resultMsg = document.getElementById('resultMessage');
+        if (resultMsg) {
+            resultMsg.innerText = "相手の再戦同意を待っています...";
+            resultMsg.style.color = "#aaa";
+        }
+        
+        // 自分のボタンを押せないように固定
+        const rematchBtn = document.getElementById('rematchButton');
+        if (rematchBtn) {
+            rematchBtn.disabled = true;
+            rematchBtn.innerText = "相手の同意を待っています...";
+            rematchBtn.style.opacity = "0.6";
+        }
     }
 });
 
@@ -371,8 +422,24 @@ document.getElementById('leaveButton').addEventListener('click', () => {
 
 function showResultMenu(title, message) {
     if (disconnectTimer) clearTimeout(disconnectTimer); 
-    document.getElementById('resultTitle').innerText = title;
-    document.getElementById('resultMessage').innerText = message;
+    
+    const resultTitle = document.getElementById('resultTitle');
+    const resultMsg = document.getElementById('resultMessage');
+    const rematchBtn = document.getElementById('rematchButton');
+
+    if (resultTitle) resultTitle.innerText = title;
+    if (resultMsg) {
+        resultMsg.innerText = message;
+        resultMsg.style.color = "#aaa"; // 色をデフォルトに戻す
+    }
+    
+    if (rematchBtn) {
+        rematchBtn.disabled = false;
+        rematchBtn.innerText = "もう一度対戦（再戦）";
+        rematchBtn.style.opacity = "1.0";
+        rematchBtn.style.background = "#4a7c59";
+    }
+
     document.getElementById('resultModal').style.display = 'flex';
 }
 
